@@ -18,8 +18,9 @@ if ENVIRONMENT not in ['local', 'production']:
 # Check if we're running in Azure Web App
 is_azure_webapp = os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME')
 
-# Simple debug logging
-print(f"Environment: {ENVIRONMENT} | Azure Web App: {is_azure_webapp}")
+# Simple debug logging (only in development)
+if os.environ.get('DEBUG', '').lower() == 'true':
+    print(f"Environment: {ENVIRONMENT} | Azure Web App: {is_azure_webapp}")
 
 st.set_page_config(page_title="Azure Firewall Policy Rule Analyzer", layout="wide")
 
@@ -835,11 +836,5 @@ with tools_tab:
                 st.error("Invalid JSON format. Please check your configuration.")
 
 
-def run():
-    """Main entry point for the Streamlit application."""
-    # This function is called when the app is run directly
-    pass
-
-
-if __name__ == "__main__":
-    run()
+# Streamlit apps don't need a main function - they run automatically
+# The app code above runs when the file is executed
