@@ -1,0 +1,311 @@
+"""
+Azure Service Module
+Handles Azure API calls using Azure SDK with Managed Identity (web app) or service principal (local dev)
+"""
+
+import json
+import os
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+import logging
+
+# Check if we're in local mode first
+IS_LOCAL_MODE = os.environ.get('STREAMLIT_ENVIRONMENT', '').lower() == 'local'
+
+# Only import Azure SDK if not in local mode
+if not IS_LOCAL_MODE:
+    try:
+        from azure.identity import DefaultAzureCredential, ClientSecretCredential
+        from azure.mgmt.network import NetworkManagementClient
+        from azure.mgmt.resource import ResourceManagementClient
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.core.exceptions import AzureError
+        AZURE_SDK_AVAILABLE = True
+    except ImportError as e:
+        logger.warning(f"Azure SDK not available: {e}")
+        AZURE_SDK_AVAILABLE = False
+else:
+    AZURE_SDK_AVAILABLE = False
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class AzureService:
+    def __init__(self, config: Dict[str, str] = None):
+        """
+        Simple Azure service - only works in production mode
+        In local mode: does nothing, uses sample data only
+        """
+        self.config = config or {}
+        self.authenticated = False
+        self.credential = None
+        self.subscription_id = None
+        self.network_client = None
+        self.resource_client = None
+        self.web_client = None
+        
+        # Only try Azure setup if not in local mode
+        if not IS_LOCAL_MODE:
+            self._setup_authentication()
+        
+    def _setup_authentication(self):
+        """Setup Azure authentication - only called in production mode"""
+        if not AZURE_SDK_AVAILABLE:
+            logger.warning("Azure SDK not available - skipping authentication setup")
+            self.authenticated = False
+            return
+            
+        try:
+            
+            # Check if running in Azure Web App environment
+            if os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME'):
+                logger.info("Detected Azure Web App environment - using Managed Identity")
+                self.credential = DefaultAzureCredential()
+                self.subscription_id = os.environ.get('AZURE_SUBSCRIPTION_ID')
+            else:
+                # Use service principal for local development
+                tenant_id = self.config.get('tenant_id') or os.environ.get('AZURE_TENANT_ID')
+                client_id = self.config.get('client_id') or os.environ.get('AZURE_CLIENT_ID')
+                client_secret = self.config.get('client_secret') or os.environ.get('AZURE_CLIENT_SECRET')
+                self.subscription_id = self.config.get('subscription_id') or os.environ.get('AZURE_SUBSCRIPTION_ID')
+                
+                if all([tenant_id, client_id, client_secret, self.subscription_id]):
+                    logger.info("Using service principal authentication (local development)")
+                    self.credential = ClientSecretCredential(
+                        tenant_id=tenant_id,
+                        client_id=client_id,
+                        client_secret=client_secret
+                    )
+                else:
+                    logger.info("No service principal config found - using Managed Identity")
+                    self.credential = DefaultAzureCredential()
+                    self.subscription_id = os.environ.get('AZURE_SUBSCRIPTION_ID')
+            
+            if not self.subscription_id:
+                logger.warning("No subscription ID found - Azure API calls will fail")
+                return
+                
+            # Initialize Azure clients only if we have credentials
+            if self.credential:
+                self.network_client = NetworkManagementClient(self.credential, self.subscription_id)
+                self.resource_client = ResourceManagementClient(self.credential, self.subscription_id)
+                self.web_client = WebSiteManagementClient(self.credential, self.subscription_id)
+                
+                self.authenticated = True
+                logger.info("Azure authentication setup successful")
+            else:
+                logger.warning("No credentials available - Azure API calls will fail")
+                self.authenticated = False
+            
+        except Exception as e:
+            logger.error(f"Failed to setup Azure authentication: {str(e)}")
+            self.authenticated = False
+
+    def get_firewall_policies(self, resource_group_name: str) -> List[Dict[str, Any]]:
+        """
+        Get all firewall policies from a resource group
+        
+        Args:
+            resource_group_name: Name of the resource group
+            
+        Returns:
+            List of firewall policy dictionaries
+        """
+        if not self.authenticated:
+            logger.error("Not authenticated with Azure")
+            return []
+            
+        try:
+            policies = []
+            for policy in self.network_client.firewall_policies.list(resource_group_name):
+                policy_dict = {
+                    'id': policy.id,
+                    'name': policy.name,
+                    'location': policy.location,
+                    'provisioning_state': policy.provisioning_state,
+                    'rule_collection_groups': []
+                }
+                
+                # Get rule collection groups
+                try:
+                    for rcg in self.network_client.firewall_policy_rule_collection_groups.list(resource_group_name, policy.name):
+                        rcg_dict = {
+                            'id': rcg.id,
+                            'name': rcg.name,
+                            'priority': rcg.priority,
+                            'rule_collections': []
+                        }
+                        
+                        # Get rule collections
+                        if rcg.rule_collections:
+                            for rule_collection in rcg.rule_collections:
+                                rule_collection_dict = {
+                                    'rule_collection_type': rule_collection.rule_collection_type,
+                                    'name': rule_collection.name,
+                                    'priority': rule_collection.priority,
+                                    'rules': []
+                                }
+                                
+                                # Get rules based on type
+                                if hasattr(rule_collection, 'rules'):
+                                    for rule in rule_collection.rules:
+                                        rule_dict = {
+                                            'rule_type': rule.rule_type,
+                                            'name': rule.name,
+                                            'priority': rule.priority,
+                                            'action': rule.action.type if rule.action else None,
+                                            'source_addresses': rule.source_addresses if hasattr(rule, 'source_addresses') else [],
+                                            'destination_addresses': rule.destination_addresses if hasattr(rule, 'destination_addresses') else [],
+                                            'destination_ports': rule.destination_ports if hasattr(rule, 'destination_ports') else [],
+                                            'protocols': rule.ip_protocols if hasattr(rule, 'ip_protocols') else [],
+                                            'fqdn_tags': rule.fqdn_tags if hasattr(rule, 'fqdn_tags') else [],
+                                            'target_fqdns': rule.target_fqdns if hasattr(rule, 'target_fqdns') else []
+                                        }
+                                        rule_collection_dict['rules'].append(rule_dict)
+                                
+                                rcg_dict['rule_collections'].append(rule_collection_dict)
+                        
+                        policy_dict['rule_collection_groups'].append(rcg_dict)
+                except Exception as e:
+                    logger.warning(f"Failed to get rule collection groups for policy {policy.name}: {str(e)}")
+                    # Continue with empty rule collection groups
+                
+                policies.append(policy_dict)
+            
+            logger.info(f"Retrieved {len(policies)} firewall policies from {resource_group_name}")
+            return policies
+            
+        except AzureError as e:
+            logger.error(f"Azure API error: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return []
+
+    def get_virtual_networks(self, resource_group_name: str) -> List[Dict[str, Any]]:
+        """
+        Get all virtual networks from a resource group
+        
+        Args:
+            resource_group_name: Name of the resource group
+            
+        Returns:
+            List of virtual network dictionaries
+        """
+        if not self.authenticated:
+            logger.error("Not authenticated with Azure")
+            return []
+            
+        try:
+            vnets = []
+            for vnet in self.network_client.virtual_networks.list(resource_group_name):
+                vnet_dict = {
+                    'id': vnet.id,
+                    'name': vnet.name,
+                    'location': vnet.location,
+                    'address_space': [str(addr) for addr in vnet.address_space.address_prefixes],
+                    'subnets': []
+                }
+                
+                # Get subnets
+                if vnet.subnets:
+                    for subnet in vnet.subnets:
+                        subnet_dict = {
+                            'id': subnet.id,
+                            'name': subnet.name,
+                            'address_prefix': subnet.address_prefix,
+                            'address_prefixes': [str(addr) for addr in subnet.address_prefixes] if subnet.address_prefixes else [subnet.address_prefix]
+                        }
+                        vnet_dict['subnets'].append(subnet_dict)
+                
+                vnets.append(vnet_dict)
+            
+            logger.info(f"Retrieved {len(vnets)} virtual networks from {resource_group_name}")
+            return vnets
+            
+        except AzureError as e:
+            logger.error(f"Azure API error: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return []
+
+    def get_resource_groups(self) -> List[Dict[str, Any]]:
+        """
+        Get all resource groups in the subscription
+        
+        Returns:
+            List of resource group dictionaries
+        """
+        if not self.authenticated:
+            logger.error("Not authenticated with Azure")
+            return []
+            
+        try:
+            resource_groups = []
+            for rg in self.resource_client.resource_groups.list():
+                rg_dict = {
+                    'id': rg.id,
+                    'name': rg.name,
+                    'location': rg.location,
+                    'provisioning_state': rg.provisioning_state,
+                    'tags': rg.tags or {}
+                }
+                resource_groups.append(rg_dict)
+            
+            logger.info(f"Retrieved {len(resource_groups)} resource groups")
+            return resource_groups
+            
+        except AzureError as e:
+            logger.error(f"Azure API error: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return []
+
+    def test_connection(self) -> bool:
+        """
+        Test Azure connection
+        
+        Returns:
+            bool: True if connection is successful
+        """
+        if not self.authenticated:
+            return False
+            
+        try:
+            # Try to list resource groups as a test
+            list(self.resource_client.resource_groups.list())
+            logger.info("Azure connection test successful")
+            return True
+        except Exception as e:
+            logger.error(f"Azure connection test failed: {str(e)}")
+            return False
+
+# Legacy functions for backward compatibility
+def load_policy_from_file(file_path: str) -> Dict[str, Any]:
+    """Load firewall policy from JSON file"""
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load policy from file {file_path}: {str(e)}")
+        return {}
+
+def load_vnets_from_file(file_path: str) -> Dict[str, Any]:
+    """Load virtual networks from JSON file"""
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load VNets from file {file_path}: {str(e)}")
+        return {}
+
+def get_file_creation_time(file_path: str) -> Optional[datetime]:
+    """Get file creation time"""
+    try:
+        return datetime.fromtimestamp(os.path.getctime(file_path))
+    except Exception as e:
+        logger.error(f"Failed to get file creation time for {file_path}: {str(e)}")
+        return None
