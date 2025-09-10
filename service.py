@@ -27,9 +27,27 @@ if not IS_LOCAL_MODE:
 else:
     AZURE_SDK_AVAILABLE = False
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure logging (only if not in Streamlit context)
+try:
+    import streamlit as st
+    # In Streamlit context, use st.write for logging instead
+    logger = None
+except ImportError:
+    # Not in Streamlit context, use regular logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+# Safe logging function
+def safe_log(level, message):
+    """Safely log messages, handling both Streamlit and non-Streamlit contexts"""
+    if logger:
+        if level == 'info':
+            logger.info(message)
+        elif level == 'warning':
+            logger.warning(message)
+        elif level == 'error':
+            logger.error(message)
+    # In Streamlit context, we could use st.write but it's not necessary for these internal logs
 
 class AzureService:
     def __init__(self, config: Dict[str, str] = None):
@@ -52,7 +70,7 @@ class AzureService:
     def _setup_authentication(self):
         """Setup Azure authentication - only called in production mode"""
         if not AZURE_SDK_AVAILABLE:
-            logger.warning("Azure SDK not available - skipping authentication setup")
+            safe_log('warning', "Azure SDK not available - skipping authentication setup")
             self.authenticated = False
             return
             
@@ -60,7 +78,8 @@ class AzureService:
             
             # Check if running in Azure Web App environment
             if os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME'):
-                logger.info("Detected Azure Web App environment - using Managed Identity")
+                if logger:
+                    logger.info("Detected Azure Web App environment - using Managed Identity")
                 self.credential = DefaultAzureCredential()
                 self.subscription_id = os.environ.get('AZURE_SUBSCRIPTION_ID')
             else:
