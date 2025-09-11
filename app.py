@@ -1,14 +1,27 @@
 import streamlit as st
 import json
+import logging
+import sys
 from firewall_parser import parse_firewall_policy, search_rules, compare_sources
 import pandas as pd
 from vnet_config import (
     load_environment_config, calculate_vnet_range, divide_into_subnets, 
     check_ip_overlap, get_subnet_info, SUBNET_SIZES, extract_ip_ranges_from_vnets
 )
-from app_config import get_feature_config, is_feature_enabled, get_azure_config
+from app_config import is_feature_enabled, get_azure_config
 from azure_service import AzureService, load_policy_from_file, load_vnets_from_file, get_file_creation_time
 import os
+
+# Configure logging for Azure Web App
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Force output to stdout
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 # Simple environment detection
 ENVIRONMENT = os.environ.get('STREAMLIT_ENVIRONMENT', 'production').lower()
@@ -18,9 +31,13 @@ if ENVIRONMENT not in ['local', 'production']:
 # Check if we're running in Azure Web App
 is_azure_webapp = os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME')
 
-# Simple debug logging (only in development)
-if os.environ.get('DEBUG', '').lower() == 'true':
-    print(f"Environment: {ENVIRONMENT} | Azure Web App: {is_azure_webapp}")
+# Log startup information
+logger.info("=== Streamlit App Startup ===")
+logger.info(f"Environment: {ENVIRONMENT}")
+logger.info(f"Azure Web App: {is_azure_webapp}")
+logger.info(f"Working directory: {os.getcwd()}")
+logger.info(f"Python path: {sys.path[:3]}...")  # First 3 entries only
+logger.info("=== Streamlit App Startup Complete ===")
 
 st.set_page_config(page_title="Azure Firewall Policy Rule Analyzer", layout="wide")
 
@@ -129,7 +146,9 @@ with st.sidebar:
             with st.spinner("Connecting to Azure and refreshing data..."):
                 try:
                     # Initialize Azure service (will auto-detect Managed Identity vs Service Principal)
+                    logger.info("Initializing Azure service for data refresh...")
                     azure_service = AzureService(azure_config)
+                    logger.info(f"Azure service initialized. Authenticated: {azure_service.authenticated}")
                     
                     if azure_service.authenticate():
                         st.success("✅ Azure authentication successful!")
@@ -262,17 +281,24 @@ if current_policy_source == "Auto-load JSON file" and auto_load_json:
     if ENVIRONMENT == 'local':
         # Local environment: use sample data
         if os.path.exists("sample_data/sample_policy.json"):
+            logger.info("Loading sample policy data...")
             policy_data = load_policy_from_file("sample_data/sample_policy.json")
+            logger.info("Sample policy data loaded successfully")
             st.success("✅ Loaded sample policy data")
         else:
+            logger.error("Sample policy file not found")
             st.error("❌ Sample policy file not found")
     else:
         # Production environment: try real data first, fallback to sample
         if os.path.exists("firewall_policy.json"):
+            logger.info("Loading Azure policy data...")
             policy_data = load_policy_from_file("firewall_policy.json")
+            logger.info("Azure policy data loaded successfully")
             st.success("✅ Loaded Azure policy data")
         elif os.path.exists("sample_data/sample_policy.json"):
+            logger.info("Loading sample policy data as fallback...")
             policy_data = load_policy_from_file("sample_data/sample_policy.json")
+            logger.info("Sample policy data loaded as fallback")
             st.warning("⚠️ Using sample data (real policy not found)")
     
     if policy_data:
@@ -597,7 +623,9 @@ with vnet_tab:
             
             try:
                 # Initialize Azure service
+                logger.info("Initializing Azure service for VNet analysis...")
                 azure_service = AzureService(azure_config)
+                logger.info(f"Azure service initialized. Authenticated: {azure_service.authenticated}")
                 if azure_service.authenticate():
                     # Get resource group from config or user input
                     resource_group = azure_config.get('resource_group')
