@@ -150,8 +150,15 @@ with st.sidebar:
                     azure_service = AzureService(azure_config)
                     logger.info(f"Azure service initialized. Authenticated: {azure_service.authenticated}")
                     
-                    if azure_service.authenticate():
-                        st.success("✅ Azure authentication successful!")
+                    if azure_service.authenticated:
+                        # Test the actual connection
+                        logger.info("Testing Azure connection...")
+                        if azure_service.test_connection():
+                            st.success("✅ Azure authentication and connection successful!")
+                            logger.info("Azure connection test passed")
+                        else:
+                            st.warning("⚠️ Azure authentication successful but connection test failed")
+                            logger.warning("Azure connection test failed")
                         
                         if is_webapp:
                             st.info("🌐 **Web App Mode**: Using Managed Identity for authentication")
@@ -626,7 +633,12 @@ with vnet_tab:
                 logger.info("Initializing Azure service for VNet analysis...")
                 azure_service = AzureService(azure_config)
                 logger.info(f"Azure service initialized. Authenticated: {azure_service.authenticated}")
-                if azure_service.authenticate():
+                if azure_service.authenticated:
+                    # Test the actual connection
+                    logger.info("Testing Azure connection for VNet analysis...")
+                    if not azure_service.test_connection():
+                        st.warning("⚠️ Azure connection test failed - VNet analysis may not work properly")
+                        logger.warning("Azure connection test failed for VNet analysis")
                     # Get resource group from config or user input
                     resource_group = azure_config.get('resource_group')
                     if not resource_group:
