@@ -22,20 +22,23 @@ if not IS_LOCAL_MODE:
         from azure.core.exceptions import AzureError
         AZURE_SDK_AVAILABLE = True
     except ImportError as e:
-        logger.warning(f"Azure SDK not available: {e}")
+        print(f"Azure SDK not available: {e}")
         AZURE_SDK_AVAILABLE = False
 else:
     AZURE_SDK_AVAILABLE = False
 
-# Configure logging (only if not in Streamlit context)
-try:
-    import streamlit as st
-    # In Streamlit context, use st.write for logging instead
-    logger = None
-except ImportError:
-    # Not in Streamlit context, use regular logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+# Configure logging for Azure Web App
+import sys
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Force output to stdout
+    ]
+)
+
+# Always create logger
+logger = logging.getLogger(__name__)
 
 # Safe logging function
 def safe_log(level, message):
@@ -55,6 +58,10 @@ class AzureService:
         Simple Azure service - only works in production mode
         In local mode: does nothing, uses sample data only
         """
+        logger.info("=== AzureService.__init__ START ===")
+        logger.info(f"IS_LOCAL_MODE: {IS_LOCAL_MODE}")
+        logger.info(f"AZURE_SDK_AVAILABLE: {AZURE_SDK_AVAILABLE}")
+        
         self.config = config or {}
         self.authenticated = False
         self.credential = None
@@ -63,31 +70,54 @@ class AzureService:
         self.resource_client = None
         self.web_client = None
         
+        # Log environment variables
+        logger.info("=== Environment Variables ===")
+        logger.info(f"STREAMLIT_ENVIRONMENT: {os.environ.get('STREAMLIT_ENVIRONMENT', 'not set')}")
+        logger.info(f"WEBSITE_SITE_NAME: {os.environ.get('WEBSITE_SITE_NAME', 'not set')}")
+        logger.info(f"AZURE_WEBAPP_NAME: {os.environ.get('AZURE_WEBAPP_NAME', 'not set')}")
+        logger.info(f"AZURE_SUBSCRIPTION_ID: {os.environ.get('AZURE_SUBSCRIPTION_ID', 'not set')}")
+        logger.info(f"AZURE_RESOURCE_GROUP: {os.environ.get('AZURE_RESOURCE_GROUP', 'not set')}")
+        logger.info(f"AZURE_TENANT_ID: {os.environ.get('AZURE_TENANT_ID', 'not set')}")
+        logger.info(f"AZURE_CLIENT_ID: {os.environ.get('AZURE_CLIENT_ID', 'not set')}")
+        logger.info(f"AZURE_CLIENT_SECRET: {'***' if os.environ.get('AZURE_CLIENT_SECRET') else 'not set'}")
+        
         # Only try Azure setup if not in local mode
         if not IS_LOCAL_MODE:
+            logger.info("Not in local mode - attempting Azure setup")
             self._setup_authentication()
+        else:
+            logger.info("Local mode - skipping Azure setup")
+        
+        logger.info("=== AzureService.__init__ END ===")
         
     def _setup_authentication(self):
         """Setup Azure authentication - only called in production mode"""
+        logger.info("=== _setup_authentication START ===")
+        
         if not AZURE_SDK_AVAILABLE:
-            safe_log('warning', "Azure SDK not available - skipping authentication setup")
+            logger.warning("Azure SDK not available - skipping authentication setup")
             self.authenticated = False
             return
             
         try:
-            
             # Check if running in Azure Web App environment
             if os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME'):
-                if logger:
-                    logger.info("Detected Azure Web App environment - using Managed Identity")
+                logger.info("Detected Azure Web App environment - using Managed Identity")
                 self.credential = DefaultAzureCredential()
                 self.subscription_id = os.environ.get('AZURE_SUBSCRIPTION_ID')
+                logger.info(f"Using subscription ID: {self.subscription_id}")
             else:
+                logger.info("Not in Azure Web App environment - checking for service principal")
                 # Use service principal for local development
                 tenant_id = self.config.get('tenant_id') or os.environ.get('AZURE_TENANT_ID')
                 client_id = self.config.get('client_id') or os.environ.get('AZURE_CLIENT_ID')
                 client_secret = self.config.get('client_secret') or os.environ.get('AZURE_CLIENT_SECRET')
                 self.subscription_id = self.config.get('subscription_id') or os.environ.get('AZURE_SUBSCRIPTION_ID')
+                
+                logger.info(f"Service principal config - tenant_id: {'***' if tenant_id else 'not set'}")
+                logger.info(f"Service principal config - client_id: {'***' if client_id else 'not set'}")
+                logger.info(f"Service principal config - client_secret: {'***' if client_secret else 'not set'}")
+                logger.info(f"Service principal config - subscription_id: {self.subscription_id or 'not set'}")
                 
                 if all([tenant_id, client_id, client_secret, self.subscription_id]):
                     logger.info("Using service principal authentication (local development)")
@@ -103,10 +133,12 @@ class AzureService:
             
             if not self.subscription_id:
                 logger.warning("No subscription ID found - Azure API calls will fail")
+                self.authenticated = False
                 return
                 
             # Initialize Azure clients only if we have credentials
             if self.credential:
+                logger.info("Initializing Azure clients...")
                 self.network_client = NetworkManagementClient(self.credential, self.subscription_id)
                 self.resource_client = ResourceManagementClient(self.credential, self.subscription_id)
                 self.web_client = WebSiteManagementClient(self.credential, self.subscription_id)
@@ -120,6 +152,8 @@ class AzureService:
         except Exception as e:
             logger.error(f"Failed to setup Azure authentication: {str(e)}")
             self.authenticated = False
+        
+        logger.info("=== _setup_authentication END ===")
 
     def get_firewall_policies(self, resource_group_name: str) -> List[Dict[str, Any]]:
         """
