@@ -40,6 +40,12 @@ logging.basicConfig(
 # Always create logger
 logger = logging.getLogger(__name__)
 
+# Suppress verbose Azure SDK logging
+logging.getLogger('azure').setLevel(logging.WARNING)
+logging.getLogger('azure.core').setLevel(logging.WARNING)
+logging.getLogger('azure.mgmt').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+
 # Safe logging function
 def safe_log(level, message):
     """Safely log messages, handling both Streamlit and non-Streamlit contexts"""
@@ -258,6 +264,18 @@ class AzureService:
             }
             
             logger.info(f"Successfully retrieved firewall policy '{policy_name}'")
+            
+            # Debug: Log the structure of what we're returning
+            logger.info(f"Policy structure - ruleCollectionGroups count: {len(policy_dict.get('properties', {}).get('ruleCollectionGroups', []))}")
+            for i, rcg in enumerate(policy_dict.get('properties', {}).get('ruleCollectionGroups', [])):
+                rule_collections = rcg.get('properties', {}).get('ruleCollections', [])
+                logger.info(f"  RCG {i}: {len(rule_collections)} rule collections")
+                for j, rc in enumerate(rule_collections):
+                    rules = rc.get('rules', [])
+                    logger.info(f"    RC {j} ({rc.get('ruleCollectionType', 'unknown')}): {len(rules)} rules")
+                    for k, rule in enumerate(rules[:3]):  # Log first 3 rules
+                        logger.info(f"      Rule {k}: {rule.get('ruleType', 'unknown')} - {rule.get('name', 'unnamed')}")
+            
             return policy_dict
             
         except AzureError as e:
