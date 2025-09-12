@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import logging
 import sys
+from datetime import datetime
 from firewall_parser import parse_firewall_policy, search_rules, compare_sources
 import pandas as pd
 from vnet_config import (
@@ -22,6 +23,12 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Suppress verbose Azure SDK logging
+logging.getLogger('azure').setLevel(logging.WARNING)
+logging.getLogger('azure.core').setLevel(logging.WARNING)
+logging.getLogger('azure.mgmt').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 # Simple environment detection
 ENVIRONMENT = os.environ.get('STREAMLIT_ENVIRONMENT', 'production').lower()
@@ -53,16 +60,22 @@ if 'show_network_table' not in st.session_state:
 if 'show_app_table' not in st.session_state:
     st.session_state.show_app_table = False
 
-# Sidebar: Choose upload method (configurable)
-with st.sidebar:
-    # Simple environment indicator
-    if ENVIRONMENT == 'local':
-        st.success("🌍 **Local Mode** - Using sample data only")
-    else:
-        st.success("🌍 **Production Mode** - Azure connectivity enabled")
-    
-    st.markdown("---")
-    st.header("Policy Source")
+    # Sidebar: Choose upload method (configurable)
+    with st.sidebar:
+        # Simple environment indicator
+        if ENVIRONMENT == 'local':
+            st.success("🌍 **Local Mode** - Using sample data only")
+        else:
+            st.success("🌍 **Production Mode** - Azure connectivity enabled")
+        
+        st.markdown("---")
+        st.header("Policy Source")
+        
+        # Debug download feature
+        if st.checkbox("🔧 Debug Mode", help="Enable to download raw policy data for debugging"):
+            st.session_state.debug_mode = True
+        else:
+            st.session_state.debug_mode = False
     
     # Check if features are enabled
     show_file_upload = is_feature_enabled("show_file_upload")
@@ -320,6 +333,25 @@ if current_policy_source == "Auto-load JSON file" and auto_load_json:
             st.warning("⚠️ Using sample data (real policy not found)")
     
     if policy_data:
+        # Debug mode: Show download option
+        if st.session_state.get('debug_mode', False):
+            st.markdown("---")
+            st.markdown("### 🔧 Debug Information")
+            
+            # Show policy metadata
+            if 'metadata' in policy_data:
+                st.json(policy_data['metadata'])
+            
+            # Download raw policy data
+            policy_json_str = json.dumps(policy_data, indent=2)
+            st.download_button(
+                label="📥 Download Raw Policy Data (JSON)",
+                data=policy_json_str,
+                file_name=f"firewall_policy_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                help="Download the raw policy data as returned by Azure SDK for debugging"
+            )
+        
         # Extract actual policy data from metadata structure
         if 'data' in policy_data:
             policy_json = policy_data['data']
@@ -344,50 +376,6 @@ if rules:
         with col3:
             st.metric("Total Rules", len(rules['network']) + len(rules['application']))
     
-    # Standalone refresh section (production environment only)
-    if ENVIRONMENT != 'local' and os.path.exists("firewall_policy.json"):
-        with st.expander("🔄 Data Refresh & Management", expanded=False):
-            st.info("Refresh Firewall or get the latest firewall info")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("📋 Show Azure Connection Help", type="secondary"):
-                    st.session_state.show_azure_help_main = True
-            with col2:
-                if st.button("🔄 Go to Azure Connection", type="primary"):
-                    st.session_state.policy_source = "Connect to Azure"
-                    st.rerun()
-            
-            # Show help if requested
-            if st.session_state.get('show_azure_help_main', False):
-                st.markdown("---")
-                st.markdown("### 🔗 How to Refresh Your Data")
-                st.info("**Option 1: Use the sidebar**")
-                st.info("1. In the left sidebar, click '🔄 Auto-Refresh from Azure'")
-                st.info("2. Enter your firewall policy name")
-                st.info("3. Click '🔄 Refresh Firewall Policy'")
-                
-                st.info("**Option 2: Use environment variables**")
-                st.code("""
-export AZURE_TENANT_ID="your-tenant-id"
-export AZURE_CLIENT_ID="your-client-id"
-export AZURE_CLIENT_SECRET="your-client-secret"
-export AZURE_SUBSCRIPTION_ID="your-subscription-id"
-export AZURE_RESOURCE_GROUP="your-resource-group"
-                """)
-                
-                st.info("**Option 3: Create a .env file**")
-                st.code("""
-AZURE_TENANT_ID=your-tenant-id
-AZURE_CLIENT_ID=your-client-id
-AZURE_CLIENT_SECRET=your-client-secret
-AZURE_SUBSCRIPTION_ID=your-subscription-id
-AZURE_RESOURCE_GROUP=your-resource-group
-                """)
-                
-                if st.button("Got it!"):
-                    st.session_state.show_azure_help_main = False
-                    st.rerun()
     
     # Network Rules Table
     if st.session_state.get('show_network_table', False):
