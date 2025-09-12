@@ -191,9 +191,14 @@ class AzureService:
                 return None
             
             logger.info(f"Getting firewall policy '{policy_name}' from resource group '{resource_group_name}' in subscription '{sub_id}'")
+            logger.info(f"Using network client: {self.network_client}")
+            logger.info(f"Network client subscription: {self.network_client.config.subscription_id}")
             
             # Get the policy
+            logger.info("🔍 About to call network_client.firewall_policies.get()...")
             policy = self.network_client.firewall_policies.get(resource_group_name, policy_name)
+            logger.info("🔍 network_client.firewall_policies.get() call completed")
+            logger.info(f"Policy retrieved: {policy.name if policy else 'None'}")
             
             policy_dict = {
                 'id': policy.id,
