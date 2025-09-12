@@ -161,9 +161,17 @@ with st.sidebar:
                             logger.warning("Azure connection test failed")
                         
                         if is_webapp:
-                            st.info("🌐 **Web App Mode**: Using Managed Identity for authentication")
+                            st.info("🌐 **Web App Mode**: Using Managed Identity for cross-subscription access")
                         else:
-                            st.info("💻 **Local Mode**: Using Service Principal for authentication")
+                            st.info("💻 **Local Mode**: Using Service Principal for cross-subscription access")
+                        
+                        # Show target subscription information
+                        target_subscription = azure_config.get('subscription_id')
+                        if target_subscription:
+                            st.info(f"🎯 **Target Subscription**: `{target_subscription}`")
+                            st.info("📋 **Required Permissions**: The Managed Identity needs 'Network Contributor' or 'Reader' role on the target subscription")
+                        else:
+                            st.warning("⚠️ No target subscription configured - set AZURE_SUBSCRIPTION_ID environment variable")
                         
                         # Get resource group (required for both modes)
                         resource_group = azure_config.get('resource_group') or st.text_input(
@@ -173,13 +181,16 @@ with st.sidebar:
                         
                         if resource_group:
                             # Get firewall policy name
-                            policy_name = st.text_input("Firewall Policy Name", 
+                            policy_name = azure_config.get('firewall_policy_name') or st.text_input("Firewall Policy Name", 
                                                       help="Enter the name of your firewall policy to refresh")
                             
                             if policy_name:
                                 if st.button("🔄 Refresh Firewall Policy", type="primary"):
                                     with st.spinner("Refreshing firewall policy..."):
-                                        policy_data = azure_service.get_firewall_policy(policy_name, resource_group)
+                                        # Get subscription ID from config
+                                        subscription_id = azure_config.get('subscription_id')
+                                        logger.info(f"Refreshing policy '{policy_name}' from resource group '{resource_group}' in subscription '{subscription_id}'")
+                                        policy_data = azure_service.get_firewall_policy(policy_name, resource_group, subscription_id)
                                         if policy_data:
                                             azure_service.save_policy_to_file(policy_data)
                                             st.success("✅ Firewall policy refreshed successfully!")
@@ -193,7 +204,7 @@ with st.sidebar:
                                             
                                             # Also refresh VNets if enabled
                                             if is_feature_enabled("enable_vnet_azure_integration"):
-                                                vnet_data = azure_service.get_existing_vnets(resource_group)
+                                                vnet_data = azure_service.get_virtual_networks(resource_group)
                                                 if vnet_data:
                                                     azure_service.save_vnets_to_file(vnet_data)
                                                     st.success("✅ VNet data also refreshed!")
@@ -649,7 +660,7 @@ with vnet_tab:
                     
                     if resource_group:
                         with st.spinner("Fetching latest VNet data from Azure..."):
-                            vnet_data = azure_service.get_existing_vnets(resource_group)
+                            vnet_data = azure_service.get_virtual_networks(resource_group)
                             if vnet_data:
                                 existing_vnets = extract_ip_ranges_from_vnets(vnet_data)
                                 st.success(f"✅ **Azure VNet Data:** Found {len(existing_vnets)} existing IP ranges")
