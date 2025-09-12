@@ -104,10 +104,10 @@ with st.sidebar:
             st.session_state.policy_source = "Connect to Azure"
             st.rerun()
 
-# Main area: Azure connection logic
-if st.session_state.get('policy_source') == "Connect to Azure":
+# Auto-refresh functionality (production environment only)
+if ENVIRONMENT != 'local' and st.session_state.get('policy_source') == "Connect to Azure":
     st.markdown("---")
-    st.header("🔄 Connect to Azure")
+    st.header("🔄 Auto-Refreshing from Azure")
     
     # Check if we have Azure configuration
     azure_config = get_azure_config()
@@ -148,54 +148,62 @@ if st.session_state.get('policy_source') == "Connect to Azure":
                         st.warning("⚠️ No target subscription configured - set AZURE_SUBSCRIPTION_ID environment variable")
                     
                     # Get resource group
-                    resource_group = azure_config.get('resource_group') or st.text_input(
-                        "Resource Group Name", 
-                        help="Enter the Azure resource group containing your firewall policy"
-                    )
+                    resource_group = azure_config.get('resource_group')
+                    if not resource_group:
+                        st.error("❌ No resource group configured - set AZURE_RESOURCE_GROUP environment variable")
+                        st.stop()
                     
-                    if resource_group:
-                        # Get firewall policy name
-                        policy_name = azure_config.get('firewall_policy_name') or st.text_input("Firewall Policy Name", 
-                                                  help="Enter the name of your firewall policy to refresh")
+                    # Get firewall policy name
+                    policy_name = azure_config.get('firewall_policy_name')
+                    if not policy_name:
+                        st.error("❌ No firewall policy name configured - set AZURE_FIREWALL_POLICY_NAME environment variable")
+                        st.stop()
+                    
+                    # Get subscription ID
+                    subscription_id = azure_config.get('subscription_id')
+                    if not subscription_id:
+                        st.error("❌ No subscription ID configured - set AZURE_SUBSCRIPTION_ID environment variable")
+                        st.stop()
+                    
+                    # Refresh firewall policy
+                    logger.info(f"Refreshing policy '{policy_name}' from resource group '{resource_group}' in subscription '{subscription_id}'")
+                    policy_data = azure_service.get_firewall_policy(policy_name, resource_group, subscription_id)
+                    
+                    if policy_data:
+                        azure_service.save_policy_to_file(policy_data)
+                        st.success("✅ Firewall policy refreshed successfully!")
+                        logger.info("Firewall policy saved to file")
                         
-                        if policy_name:
-                            if st.button("🔄 Refresh Firewall Policy", type="primary"):
-                                with st.spinner("Refreshing firewall policy..."):
-                                    # Get subscription ID from config
-                                    subscription_id = azure_config.get('subscription_id')
-                                    logger.info(f"Refreshing policy '{policy_name}' from resource group '{resource_group}' in subscription '{subscription_id}'")
-                                    policy_data = azure_service.get_firewall_policy(policy_name, resource_group, subscription_id)
-                                    if policy_data:
-                                        azure_service.save_policy_to_file(policy_data)
-                                        st.success("✅ Firewall policy refreshed successfully!")
-                                        
-                                        # Show authentication method used
-                                        auth_method = policy_data.get('metadata', {}).get('auth_method', 'unknown')
-                                        if auth_method == 'managed_identity':
-                                            st.info("🔐 **Authentication**: Managed Identity (Web App)")
-                                        else:
-                                            st.info("🔐 **Authentication**: Service Principal (Local)")
-                                        
-                                        # Also refresh VNets if enabled
-                                        if is_feature_enabled("enable_vnet_azure_integration"):
-                                            vnet_data = azure_service.get_virtual_networks(resource_group)
-                                            if vnet_data:
-                                                azure_service.save_vnets_to_file(vnet_data)
-                                                st.success("✅ VNet data also refreshed!")
-                                        
-                                        # Reset the trigger
-                                        st.session_state.policy_source = "Auto-load JSON file"
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Failed to refresh firewall policy")
-                                        st.info("💡 **Troubleshooting**: Check the logs for detailed error information")
+                        # Show authentication method used
+                        auth_method = policy_data.get('metadata', {}).get('auth_method', 'unknown')
+                        if auth_method == 'managed_identity':
+                            st.info("🔐 **Authentication**: Managed Identity (Web App)")
+                        else:
+                            st.info("🔐 **Authentication**: Service Principal (Local)")
+                        
+                        # Also refresh VNets if enabled
+                        if is_feature_enabled("enable_vnet_azure_integration"):
+                            logger.info("Refreshing VNet data...")
+                            vnet_data = azure_service.get_virtual_networks(resource_group)
+                            if vnet_data:
+                                azure_service.save_vnets_to_file(vnet_data)
+                                st.success("✅ VNet data also refreshed!")
+                                logger.info("VNet data saved to file")
+                        
+                        # Reset the trigger and reload
+                        st.session_state.policy_source = "Auto-load JSON file"
+                        st.rerun()
                     else:
-                        st.warning("⚠️ Please enter a resource group name")
+                        st.error("❌ Failed to refresh firewall policy")
+                        logger.error("Failed to get firewall policy from Azure")
+                        st.info("💡 **Troubleshooting**: Check the logs for detailed error information")
                 else:
-                    st.error("Azure authentication failed")
+                    st.error("❌ Azure authentication failed")
+                    logger.error("Azure authentication failed")
                     
             except Exception as e:
-                st.error(f"Auto-refresh failed: {e}")
+                st.error(f"❌ Auto-refresh failed: {e}")
+                logger.error(f"Auto-refresh failed: {e}")
                 if is_webapp:
                     st.info("Please check your Managed Identity permissions in Azure")
                 else:
@@ -208,6 +216,7 @@ AZURE_SUBSCRIPTION_ID=your-subscription-id
 AZURE_RESOURCE_GROUP=your-resource-group-name
 AZURE_FIREWALL_POLICY_NAME=your-firewall-policy-name
         """)
+        st.info("💡 **Tip**: Set these environment variables in your Azure Web App configuration")
 
 # Load policy data
 policy_json = None
@@ -215,6 +224,7 @@ rules = None
 
 # Get the current policy source from session state
 current_policy_source = st.session_state.get('policy_source', 'Auto-load JSON file')
+logger.info(f"Current policy source: {current_policy_source}")
 
 if current_policy_source == "Auto-load JSON file" and auto_load_json:
     # Load policy based on environment
@@ -232,6 +242,9 @@ if current_policy_source == "Auto-load JSON file" and auto_load_json:
     else:
         # Production environment: try real data first, fallback to sample
         logger.info("Production environment - attempting to load policy data")
+        logger.info(f"Checking for firewall_policy.json: {os.path.exists('firewall_policy.json')}")
+        logger.info(f"Checking for sample_data/sample_policy.json: {os.path.exists('sample_data/sample_policy.json')}")
+        
         if os.path.exists("firewall_policy.json"):
             logger.info("Loading Azure policy data...")
             policy_data = load_policy_from_file("firewall_policy.json")
@@ -242,6 +255,9 @@ if current_policy_source == "Auto-load JSON file" and auto_load_json:
             policy_data = load_policy_from_file("sample_data/sample_policy.json")
             logger.info("Sample policy data loaded as fallback")
             st.warning("⚠️ Using sample data (real policy not found)")
+        else:
+            logger.warning("No policy files found - neither firewall_policy.json nor sample_data/sample_policy.json")
+            st.warning("⚠️ No policy data found")
     
     if policy_data:
         # Debug mode: Show download option
