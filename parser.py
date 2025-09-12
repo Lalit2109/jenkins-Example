@@ -4,6 +4,8 @@ import ipaddress
 import fnmatch
 import logging
 
+# Ensure logging is configured
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def parse_firewall_policy(policy_json: Any) -> Dict[str, List[dict]]:
@@ -18,8 +20,17 @@ def parse_firewall_policy(policy_json: Any) -> Dict[str, List[dict]]:
     # --- ARM/Portal/SDK format: dict with 'properties' and 'ruleCollectionGroups' ---
     if isinstance(policy_json, dict) and 'properties' in policy_json:
         groups = policy_json.get('properties', {}).get('ruleCollectionGroups', [])
-        for group in groups:
-            collections = group.get('properties', {}).get('ruleCollections', [])
+        logger.debug(f"DEBUG: Found {len(groups)} rule collection groups in ARM format")
+        for i, group in enumerate(groups):
+            logger.debug(f"DEBUG: Processing group {i}: {group.keys() if isinstance(group, dict) else type(group)}")
+            if isinstance(group, dict):
+                logger.debug(f"DEBUG: Group {i} properties: {group.get('properties', {}).keys()}")
+                collections = group.get('properties', {}).get('ruleCollections', [])
+                logger.debug(f"DEBUG: Group {i} has {len(collections)} rule collections")
+            else:
+                logger.debug(f"DEBUG: Group {i} is not a dict: {type(group)}")
+                continue
+            
             for collection in collections:
                 rc_type = collection.get('ruleCollectionType', '').lower()
                 rules = collection.get('rules', [])
@@ -41,22 +52,22 @@ def parse_firewall_policy(policy_json: Any) -> Dict[str, List[dict]]:
                 rules = collection.get('rules', [])
                 
                 # Debug logging
-                logger.info(f"DEBUG: Processing rule collection type: '{rc_type}' with {len(rules)} rules")
+                logger.debug(f"DEBUG: Processing rule collection type: '{rc_type}' with {len(rules)} rules")
                 
                 # Handle different rule types (case insensitive)
                 if rc_type.lower() in ['networkrulecollection', 'firewallpolicyfilterrulecollection']:
-                    logger.info(f"DEBUG: Processing {len(rules)} rules in {rc_type}")
+                    logger.debug(f"DEBUG: Processing {len(rules)} rules in {rc_type}")
                     for rule in rules:
                         rule_type = rule.get('ruleType', '').lower()
-                        logger.info(f"DEBUG: Rule type: '{rule_type}', name: '{rule.get('name', 'unnamed')}'")
+                        logger.debug(f"DEBUG: Rule type: '{rule_type}', name: '{rule.get('name', 'unnamed')}'")
                         if rule_type == 'networkrule':
                             network_rules.append(rule)
-                            logger.info(f"DEBUG: Added network rule: {rule.get('name', 'unnamed')}")
+                            logger.debug(f"DEBUG: Added network rule: {rule.get('name', 'unnamed')}")
                         elif rule_type == 'applicationrule':
                             application_rules.append(rule)
-                            logger.info(f"DEBUG: Added application rule: {rule.get('name', 'unnamed')}")
+                            logger.debug(f"DEBUG: Added application rule: {rule.get('name', 'unnamed')}")
                         else:
-                            logger.info(f"DEBUG: Unknown rule type: '{rule_type}'")
+                            logger.debug(f"DEBUG: Unknown rule type: '{rule_type}'")
                 elif rc_type == 'applicationrulecollection':
                     for rule in rules:
                         rule_type = rule.get('ruleType', '').lower()
