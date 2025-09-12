@@ -225,8 +225,18 @@ class AzureService:
                     # Get rule collections
                     if rcg.rule_collections:
                         for rule_collection in rcg.rule_collections:
+                            # Map Azure SDK rule collection types to parser-expected types
+                            rc_type = rule_collection.rule_collection_type
+                            if rc_type == 'FirewallPolicyFilterRuleCollection':
+                                # This contains both network and application rules, we'll determine by rule type
+                                mapped_type = 'FirewallPolicyFilterRuleCollection'
+                            elif rc_type == 'FirewallPolicyNatRuleCollection':
+                                mapped_type = 'NetworkRuleCollection'  # NAT rules are treated as network rules
+                            else:
+                                mapped_type = rc_type
+                            
                             rule_collection_dict = {
-                                'ruleCollectionType': rule_collection.rule_collection_type,
+                                'ruleCollectionType': mapped_type,
                                 'name': rule_collection.name,
                                 'priority': getattr(rule_collection, 'priority', None),  # Safe access to priority
                                 'rules': []
