@@ -15,7 +15,7 @@ import os
 
 # Configure logging for Azure Web App
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout)  # Force output to stdout
@@ -384,6 +384,22 @@ if current_policy_source == "Auto-load JSON file" and auto_load_json:
                 file_name=f"firewall_policy_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
                 help="Download the raw policy data as returned by Azure SDK for debugging"
+            )
+        
+        # Always show download option for Azure data (not just debug mode)
+        if policy_data and 'metadata' in policy_data and policy_data['metadata'].get('source') == 'azure_sdk':
+            st.markdown("---")
+            st.markdown("### 📥 Download Azure Policy Data")
+            st.info("Download the raw Azure policy data to examine its structure")
+            
+            # Download raw policy data
+            policy_json_str = json.dumps(policy_data, indent=2)
+            st.download_button(
+                label="📥 Download Azure Policy JSON",
+                data=policy_json_str,
+                file_name=f"azure_firewall_policy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                help="Download the raw Azure policy data for structure analysis"
             )
         
         # Extract actual policy data from metadata structure
