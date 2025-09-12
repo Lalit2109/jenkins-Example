@@ -108,6 +108,9 @@ with st.sidebar:
             logger.info("🔄 Auto-Refresh button clicked - switching to Azure connection mode")
             st.session_state.policy_source = "Connect to Azure"
             logger.info(f"Session state updated to: {st.session_state.get('policy_source')}")
+            # Force the session state to persist
+            st.session_state.force_azure_refresh = True
+            logger.info("Setting force_azure_refresh flag")
             st.rerun()
         
         # Add a direct test button for debugging
@@ -141,10 +144,11 @@ with st.sidebar:
 
 # Auto-refresh functionality (only when explicitly requested)
 current_policy_source = st.session_state.get('policy_source', 'Auto-load JSON file')
-logger.info(f"Checking auto-refresh condition - current policy source: {current_policy_source}")
+force_azure_refresh = st.session_state.get('force_azure_refresh', False)
+logger.info(f"Checking auto-refresh condition - current policy source: {current_policy_source}, force_azure_refresh: {force_azure_refresh}")
 
 # Only show Azure connection section when explicitly requested
-if ENVIRONMENT != 'local' and current_policy_source == "Connect to Azure":
+if ENVIRONMENT != 'local' and (current_policy_source == "Connect to Azure" or force_azure_refresh):
     logger.info("🔄 Auto-refresh section triggered - attempting Azure connection")
     st.markdown("---")
     st.header("🔄 Auto-Refreshing from Azure")
@@ -271,6 +275,7 @@ if ENVIRONMENT != 'local' and current_policy_source == "Connect to Azure":
                         
                         # Reset the trigger and reload
                         st.session_state.policy_source = "Auto-load JSON file"
+                        st.session_state.force_azure_refresh = False
                         st.session_state.azure_refresh_success = True
                         st.rerun()
                     else:
@@ -280,10 +285,12 @@ if ENVIRONMENT != 'local' and current_policy_source == "Connect to Azure":
                 else:
                     st.error("❌ Azure authentication failed")
                     logger.error("Azure authentication failed")
+                    st.session_state.force_azure_refresh = False
                     
             except Exception as e:
                 st.error(f"❌ Auto-refresh failed: {e}")
                 logger.error(f"Auto-refresh failed: {e}")
+                st.session_state.force_azure_refresh = False
                 if is_webapp:
                     st.info("Please check your Managed Identity permissions in Azure")
                 else:
@@ -311,6 +318,7 @@ AZURE_FIREWALL_POLICY_NAME=your-firewall-policy-name
         if missing_vars:
             st.error(f"❌ **Missing variables:** {', '.join(missing_vars)}")
             logger.error(f"Missing Azure configuration variables: {missing_vars}")
+            st.session_state.force_azure_refresh = False
 else:
     # Show success message if Azure refresh was successful
     if st.session_state.get('azure_refresh_success', False):
