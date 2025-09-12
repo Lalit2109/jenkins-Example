@@ -131,13 +131,20 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"❌ Azure connection test failed: {e}")
                 logger.error(f"Azure connection test failed: {e}")
+        
+        # Add a reset button to go back to sample data
+        if st.button("🔄 Reset to Sample Data", type="secondary"):
+            logger.info("🔄 Reset to sample data button clicked")
+            st.session_state.policy_source = "Auto-load JSON file"
+            st.session_state.azure_refresh_success = False
+            st.rerun()
 
-# Auto-refresh functionality (always show in production mode)
+# Auto-refresh functionality (only when explicitly requested)
 current_policy_source = st.session_state.get('policy_source', 'Auto-load JSON file')
 logger.info(f"Checking auto-refresh condition - current policy source: {current_policy_source}")
 
-# Always show Azure connection section in production mode
-if ENVIRONMENT != 'local':
+# Only show Azure connection section when explicitly requested
+if ENVIRONMENT != 'local' and current_policy_source == "Connect to Azure":
     logger.info("🔄 Auto-refresh section triggered - attempting Azure connection")
     st.markdown("---")
     st.header("🔄 Auto-Refreshing from Azure")
@@ -233,6 +240,7 @@ if ENVIRONMENT != 'local':
                         
                         # Reset the trigger and reload
                         st.session_state.policy_source = "Auto-load JSON file"
+                        st.session_state.azure_refresh_success = True
                         st.rerun()
                     else:
                         st.error("❌ Failed to refresh firewall policy")
@@ -272,6 +280,11 @@ AZURE_FIREWALL_POLICY_NAME=your-firewall-policy-name
         if missing_vars:
             st.error(f"❌ **Missing variables:** {', '.join(missing_vars)}")
             logger.error(f"Missing Azure configuration variables: {missing_vars}")
+else:
+    # Show success message if Azure refresh was successful
+    if st.session_state.get('azure_refresh_success', False):
+        st.success("✅ Azure data refreshed successfully! The app is now using the latest data from Azure.")
+        st.session_state.azure_refresh_success = False  # Reset the flag
 
 # Load policy data
 policy_json = None
