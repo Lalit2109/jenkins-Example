@@ -211,7 +211,7 @@ class AzureService:
                     rcg_dict = {
                         'id': rcg.id,
                         'name': rcg.name,
-                        'priority': rcg.priority,
+                        'priority': getattr(rcg, 'priority', None),  # Safe access to priority
                         'properties': {
                             'ruleCollections': []
                         }
@@ -223,7 +223,7 @@ class AzureService:
                             rule_collection_dict = {
                                 'ruleCollectionType': rule_collection.rule_collection_type,
                                 'name': rule_collection.name,
-                                'priority': rule_collection.priority,
+                                'priority': getattr(rule_collection, 'priority', None),  # Safe access to priority
                                 'rules': []
                             }
                             
@@ -233,9 +233,9 @@ class AzureService:
                                     rule_dict = {
                                         'ruleType': rule.rule_type,
                                         'name': rule.name,
-                                        'priority': rule.priority,
+                                        'priority': getattr(rule, 'priority', None),  # Safe access to priority
                                         'action': {
-                                            'type': rule.action.type if rule.action else None
+                                            'type': rule.action.type if hasattr(rule, 'action') and rule.action else None
                                         },
                                         'sourceAddresses': rule.source_addresses if hasattr(rule, 'source_addresses') else [],
                                         'destinationAddresses': rule.destination_addresses if hasattr(rule, 'destination_addresses') else [],
