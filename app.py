@@ -197,25 +197,53 @@ if ENVIRONMENT != 'local' and current_policy_source == "Connect to Azure":
                     
                     # Get resource group
                     resource_group = azure_config.get('resource_group')
+                    logger.info(f"Resource group from config: '{resource_group}'")
                     if not resource_group:
                         st.error("❌ No resource group configured - set AZURE_RESOURCE_GROUP environment variable")
                         st.stop()
                     
                     # Get firewall policy name
                     policy_name = azure_config.get('firewall_policy_name')
+                    logger.info(f"Firewall policy name from config: '{policy_name}'")
                     if not policy_name:
                         st.error("❌ No firewall policy name configured - set AZURE_FIREWALL_POLICY_NAME environment variable")
                         st.stop()
                     
                     # Get subscription ID
                     subscription_id = azure_config.get('subscription_id')
+                    logger.info(f"Subscription ID from config: '{subscription_id}'")
                     if not subscription_id:
                         st.error("❌ No subscription ID configured - set AZURE_SUBSCRIPTION_ID environment variable")
                         st.stop()
                     
+                    # Check if firewall policy exists first
+                    logger.info(f"Checking if firewall policy '{policy_name}' exists in resource group '{resource_group}'...")
+                    try:
+                        # Try to get the policy to see if it exists
+                        policy = azure_service.network_client.firewall_policies.get(resource_group, policy_name)
+                        logger.info(f"✅ Firewall policy '{policy_name}' exists and is accessible")
+                        logger.info(f"Policy ID: {policy.id}")
+                        logger.info(f"Policy location: {policy.location}")
+                    except Exception as e:
+                        logger.error(f"❌ Firewall policy '{policy_name}' not found or not accessible: {str(e)}")
+                        st.error(f"❌ Firewall policy '{policy_name}' not found in resource group '{resource_group}'")
+                        st.error(f"Error: {str(e)}")
+                        st.stop()
+                    
                     # Refresh firewall policy
                     logger.info(f"Refreshing policy '{policy_name}' from resource group '{resource_group}' in subscription '{subscription_id}'")
+                    logger.info("🔍 About to call azure_service.get_firewall_policy()...")
                     policy_data = azure_service.get_firewall_policy(policy_name, resource_group, subscription_id)
+                    logger.info("🔍 azure_service.get_firewall_policy() call completed")
+                    
+                    logger.info(f"Firewall policy call result: {policy_data is not None}")
+                    if policy_data:
+                        logger.info(f"Policy data keys: {list(policy_data.keys())}")
+                        logger.info(f"Policy properties: {policy_data.get('properties', {}).keys()}")
+                        logger.info(f"Rule collection groups count: {len(policy_data.get('properties', {}).get('ruleCollectionGroups', []))}")
+                    else:
+                        logger.error("❌ Firewall policy call returned None - check logs for errors")
+                        logger.error("This means the firewall policy call failed - check Azure service logs above")
                     
                     if policy_data:
                         azure_service.save_policy_to_file(policy_data)
@@ -233,10 +261,13 @@ if ENVIRONMENT != 'local' and current_policy_source == "Connect to Azure":
                         if is_feature_enabled("enable_vnet_azure_integration"):
                             logger.info("Refreshing VNet data...")
                             vnet_data = azure_service.get_virtual_networks(resource_group)
+                            logger.info(f"VNet data retrieved: {len(vnet_data) if vnet_data else 0} VNets")
                             if vnet_data:
                                 azure_service.save_vnets_to_file(vnet_data)
                                 st.success("✅ VNet data also refreshed!")
                                 logger.info("VNet data saved to file")
+                            else:
+                                logger.info("No VNets found in resource group - this is normal if the resource group doesn't contain VNets")
                         
                         # Reset the trigger and reload
                         st.session_state.policy_source = "Auto-load JSON file"
