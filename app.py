@@ -392,7 +392,22 @@ if current_policy_source == "Auto-load JSON file" and auto_load_json:
         else:
             policy_json = policy_data
         
+        logger.info(f"🔍 Policy JSON structure: {list(policy_json.keys()) if isinstance(policy_json, dict) else type(policy_json)}")
+        if isinstance(policy_json, dict) and 'properties' in policy_json:
+            logger.info(f"Policy properties keys: {list(policy_json['properties'].keys())}")
+            if 'ruleCollectionGroups' in policy_json['properties']:
+                logger.info(f"Rule collection groups count: {len(policy_json['properties']['ruleCollectionGroups'])}")
+        
+        logger.info("🔍 About to parse firewall policy...")
         rules = parse_firewall_policy(policy_json)
+        logger.info(f"🔍 Parsing completed. Rules result: {rules is not None}")
+        if rules:
+            logger.info(f"Rules structure: {list(rules.keys()) if isinstance(rules, dict) else type(rules)}")
+            if isinstance(rules, dict):
+                logger.info(f"Network rules count: {len(rules.get('network', []))}")
+                logger.info(f"Application rules count: {len(rules.get('application', []))}")
+        else:
+            logger.error("❌ parse_firewall_policy returned None or empty result")
 elif uploaded_file:
     policy_json = json.load(uploaded_file)
     rules = parse_firewall_policy(policy_json)
