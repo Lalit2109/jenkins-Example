@@ -100,19 +100,22 @@ class AzureService:
             return
             
         try:
+            # Always prioritize subscription ID from config/environment variables
+            # This allows the app to access resources in a different subscription than where it's deployed
+            self.subscription_id = self.config.get('subscription_id') or os.environ.get('AZURE_SUBSCRIPTION_ID')
+            logger.info(f"Target subscription ID: {self.subscription_id}")
+            
             # Check if running in Azure Web App environment
             if os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME'):
                 logger.info("Detected Azure Web App environment - using Managed Identity")
                 self.credential = DefaultAzureCredential()
-                self.subscription_id = os.environ.get('AZURE_SUBSCRIPTION_ID')
-                logger.info(f"Using subscription ID: {self.subscription_id}")
+                logger.info("Using Managed Identity for cross-subscription access")
             else:
                 logger.info("Not in Azure Web App environment - checking for service principal")
                 # Use service principal for local development
                 tenant_id = self.config.get('tenant_id') or os.environ.get('AZURE_TENANT_ID')
                 client_id = self.config.get('client_id') or os.environ.get('AZURE_CLIENT_ID')
                 client_secret = self.config.get('client_secret') or os.environ.get('AZURE_CLIENT_SECRET')
-                self.subscription_id = self.config.get('subscription_id') or os.environ.get('AZURE_SUBSCRIPTION_ID')
                 
                 logger.info(f"Service principal config - tenant_id: {'***' if tenant_id else 'not set'}")
                 logger.info(f"Service principal config - client_id: {'***' if client_id else 'not set'}")
@@ -136,17 +139,20 @@ class AzureService:
                 self.authenticated = False
                 return
                 
-            # Initialize Azure clients only if we have credentials
-            if self.credential:
-                logger.info("Initializing Azure clients...")
+            # Initialize Azure clients only if we have credentials and subscription ID
+            if self.credential and self.subscription_id:
+                logger.info(f"Initializing Azure clients for subscription: {self.subscription_id}")
                 self.network_client = NetworkManagementClient(self.credential, self.subscription_id)
                 self.resource_client = ResourceManagementClient(self.credential, self.subscription_id)
                 self.web_client = WebSiteManagementClient(self.credential, self.subscription_id)
                 
                 self.authenticated = True
-                logger.info("Azure authentication setup successful")
+                logger.info("Azure authentication setup successful for cross-subscription access")
             else:
-                logger.warning("No credentials available - Azure API calls will fail")
+                if not self.credential:
+                    logger.warning("No credentials available - Azure API calls will fail")
+                if not self.subscription_id:
+                    logger.warning("No subscription ID provided - Azure API calls will fail")
                 self.authenticated = False
             
         except Exception as e:
@@ -154,6 +160,112 @@ class AzureService:
             self.authenticated = False
         
         logger.info("=== _setup_authentication END ===")
+
+    def get_firewall_policy(self, policy_name: str, resource_group_name: str, subscription_id: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific firewall policy by name
+        
+        Args:
+            policy_name: Name of the firewall policy
+            resource_group_name: Name of the resource group
+            subscription_id: Subscription ID (optional, uses instance subscription if not provided)
+            
+        Returns:
+            Firewall policy dictionary or None if not found
+        """
+        if not self.authenticated:
+            logger.error("Not authenticated with Azure")
+            return None
+            
+        try:
+            # Use provided subscription or instance subscription
+            sub_id = subscription_id or self.subscription_id
+            if not sub_id:
+                logger.error("No subscription ID provided")
+                return None
+            
+            logger.info(f"Getting firewall policy '{policy_name}' from resource group '{resource_group_name}' in subscription '{sub_id}'")
+            
+            # Get the policy
+            policy = self.network_client.firewall_policies.get(resource_group_name, policy_name)
+            
+            policy_dict = {
+                'id': policy.id,
+                'name': policy.name,
+                'location': policy.location,
+                'provisioning_state': policy.provisioning_state,
+                'properties': {
+                    'ruleCollectionGroups': []
+                }
+            }
+            
+            # Get rule collection groups
+            try:
+                for rcg in self.network_client.firewall_policy_rule_collection_groups.list(resource_group_name, policy_name):
+                    rcg_dict = {
+                        'id': rcg.id,
+                        'name': rcg.name,
+                        'priority': rcg.priority,
+                        'properties': {
+                            'ruleCollections': []
+                        }
+                    }
+                    
+                    # Get rule collections
+                    if rcg.rule_collections:
+                        for rule_collection in rcg.rule_collections:
+                            rule_collection_dict = {
+                                'ruleCollectionType': rule_collection.rule_collection_type,
+                                'name': rule_collection.name,
+                                'priority': rule_collection.priority,
+                                'rules': []
+                            }
+                            
+                            # Get rules based on type
+                            if hasattr(rule_collection, 'rules'):
+                                for rule in rule_collection.rules:
+                                    rule_dict = {
+                                        'ruleType': rule.rule_type,
+                                        'name': rule.name,
+                                        'priority': rule.priority,
+                                        'action': {
+                                            'type': rule.action.type if rule.action else None
+                                        },
+                                        'sourceAddresses': rule.source_addresses if hasattr(rule, 'source_addresses') else [],
+                                        'destinationAddresses': rule.destination_addresses if hasattr(rule, 'destination_addresses') else [],
+                                        'destinationPorts': rule.destination_ports if hasattr(rule, 'destination_ports') else [],
+                                        'ipProtocols': rule.ip_protocols if hasattr(rule, 'ip_protocols') else [],
+                                        'fqdnTags': rule.fqdn_tags if hasattr(rule, 'fqdn_tags') else [],
+                                        'targetFqdns': rule.target_fqdns if hasattr(rule, 'target_fqdns') else []
+                                    }
+                                    rule_collection_dict['rules'].append(rule_dict)
+                            
+                            rcg_dict['properties']['ruleCollections'].append(rule_collection_dict)
+                    
+                    policy_dict['properties']['ruleCollectionGroups'].append(rcg_dict)
+            except Exception as e:
+                logger.warning(f"Failed to get rule collection groups for policy {policy_name}: {str(e)}")
+                # Continue with empty rule collection groups
+            
+            # Add metadata
+            policy_dict['metadata'] = {
+                'fetched_at': datetime.now().isoformat(),
+                'policy_name': policy_name,
+                'resource_group': resource_group_name,
+                'subscription_id': sub_id,
+                'source': 'azure_sdk',
+                'auth_method': 'managed_identity' if os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME') else 'service_principal'
+            }
+            
+            logger.info(f"Successfully retrieved firewall policy '{policy_name}'")
+            return policy_dict
+            
+        except AzureError as e:
+            logger.error(f"Azure API error getting firewall policy: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting firewall policy: {str(e)}")
+            return None
 
     def get_firewall_policies(self, resource_group_name: str) -> List[Dict[str, Any]]:
         """
@@ -335,6 +447,36 @@ class AzureService:
         except Exception as e:
             logger.error(f"Azure connection test failed: {str(e)}")
             return False
+
+    def save_policy_to_file(self, policy_data: Dict[str, Any], filename: str = "firewall_policy.json"):
+        """
+        Save policy data to JSON file
+        
+        Args:
+            policy_data: Policy data to save
+            filename: Target filename
+        """
+        try:
+            with open(filename, 'w') as f:
+                json.dump(policy_data, f, indent=2)
+            logger.info(f"Policy saved to {filename}")
+        except Exception as e:
+            logger.error(f"Error saving policy: {e}")
+
+    def save_vnets_to_file(self, vnet_data: List[Dict[str, Any]], filename: str = "existing_vnets.json"):
+        """
+        Save VNet data to JSON file
+        
+        Args:
+            vnet_data: VNet data to save
+            filename: Target filename
+        """
+        try:
+            with open(filename, 'w') as f:
+                json.dump(vnet_data, f, indent=2)
+            logger.info(f"VNet data saved to {filename}")
+        except Exception as e:
+            logger.error(f"Error saving VNet data: {e}")
 
 # Legacy functions for backward compatibility
 def load_policy_from_file(file_path: str) -> Dict[str, Any]:
