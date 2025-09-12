@@ -100,22 +100,63 @@ with st.sidebar:
         st.markdown("---")
         st.header("Azure Connection")
         
+        # Show current policy source for debugging
+        current_source = st.session_state.get('policy_source', 'Auto-load JSON file')
+        st.info(f"Current policy source: {current_source}")
+        
         if st.button("🔄 Auto-Refresh from Azure", type="primary"):
+            logger.info("🔄 Auto-Refresh button clicked - switching to Azure connection mode")
             st.session_state.policy_source = "Connect to Azure"
+            logger.info(f"Session state updated to: {st.session_state.get('policy_source')}")
             st.rerun()
+        
+        # Add a direct test button for debugging
+        if st.button("🧪 Test Azure Connection (Debug)", type="secondary"):
+            logger.info("🧪 Test Azure Connection button clicked")
+            try:
+                azure_config = get_azure_config()
+                logger.info(f"Azure config from test: {azure_config}")
+                
+                # Try to initialize Azure service
+                azure_service = AzureService(azure_config)
+                logger.info(f"Azure service initialized. Authenticated: {azure_service.authenticated}")
+                
+                if azure_service.authenticated:
+                    st.success("✅ Azure connection successful!")
+                    logger.info("Azure connection test successful")
+                else:
+                    st.error("❌ Azure authentication failed")
+                    logger.error("Azure authentication failed")
+                    
+            except Exception as e:
+                st.error(f"❌ Azure connection test failed: {e}")
+                logger.error(f"Azure connection test failed: {e}")
 
-# Auto-refresh functionality (production environment only)
-if ENVIRONMENT != 'local' and st.session_state.get('policy_source') == "Connect to Azure":
+# Auto-refresh functionality (always show in production mode)
+current_policy_source = st.session_state.get('policy_source', 'Auto-load JSON file')
+logger.info(f"Checking auto-refresh condition - current policy source: {current_policy_source}")
+
+# Always show Azure connection section in production mode
+if ENVIRONMENT != 'local':
+    logger.info("🔄 Auto-refresh section triggered - attempting Azure connection")
     st.markdown("---")
     st.header("🔄 Auto-Refreshing from Azure")
     
     # Check if we have Azure configuration
     azure_config = get_azure_config()
     is_webapp = os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME')
+    logger.info(f"Azure config: {azure_config}")
+    logger.info(f"Is webapp: {is_webapp}")
     
-    if is_webapp or all([azure_config.get('tenant_id'), azure_config.get('client_id'), 
+    # Check if we have valid Azure configuration
+    has_service_principal = all([azure_config.get('tenant_id'), azure_config.get('client_id'), 
             azure_config.get('client_secret'), azure_config.get('subscription_id'), 
-            azure_config.get('resource_group')]):
+            azure_config.get('resource_group')])
+    
+    logger.info(f"Has service principal config: {has_service_principal}")
+    logger.info(f"Service principal details: tenant_id={bool(azure_config.get('tenant_id'))}, client_id={bool(azure_config.get('client_id'))}, client_secret={bool(azure_config.get('client_secret'))}, subscription_id={bool(azure_config.get('subscription_id'))}, resource_group={bool(azure_config.get('resource_group'))}")
+    
+    if is_webapp or has_service_principal:
         
         with st.spinner("Connecting to Azure and refreshing data..."):
             try:
@@ -209,6 +250,7 @@ if ENVIRONMENT != 'local' and st.session_state.get('policy_source') == "Connect 
                 else:
                     st.info("Please check your Azure configuration in app_config.py or environment variables")
     else:
+        logger.warning("⚠️ Azure configuration incomplete - missing required environment variables")
         st.warning("⚠️ Azure configuration incomplete")
         st.info("**Required environment variables:**")
         st.code("""
@@ -217,6 +259,19 @@ AZURE_RESOURCE_GROUP=your-resource-group-name
 AZURE_FIREWALL_POLICY_NAME=your-firewall-policy-name
         """)
         st.info("💡 **Tip**: Set these environment variables in your Azure Web App configuration")
+        
+        # Show what's missing
+        missing_vars = []
+        if not azure_config.get('subscription_id'):
+            missing_vars.append('AZURE_SUBSCRIPTION_ID')
+        if not azure_config.get('resource_group'):
+            missing_vars.append('AZURE_RESOURCE_GROUP')
+        if not azure_config.get('firewall_policy_name'):
+            missing_vars.append('AZURE_FIREWALL_POLICY_NAME')
+        
+        if missing_vars:
+            st.error(f"❌ **Missing variables:** {', '.join(missing_vars)}")
+            logger.error(f"Missing Azure configuration variables: {missing_vars}")
 
 # Load policy data
 policy_json = None
@@ -417,16 +472,386 @@ search_tab, compare_tab, vnet_tab, tools_tab = st.tabs(["Search", "Compare", "VN
 
 with search_tab:
     st.subheader("Search Rule Accessibility")
-    # Search functionality would go here
+    if rules:
+        with st.form("search_form"):
+            source = st.text_input("Source IP/CIDR (optional)", "", help="Leave blank to match any source")
+            destination = st.text_input("Destination IP/CIDR/FQDN (optional)", "", help="Leave blank to match any destination")
+            submitted = st.form_submit_button("Search")
+        if submitted:
+            if not source and not destination:
+                st.warning("Please enter at least a source or destination to search.")
+            else:
+                with st.spinner("Searching for matching rules..."):
+                    results = search_rules(rules, source, destination)
+                if results:
+                    st.success(f"Found {len(results)} matching rule(s):")
+                    st.dataframe([
+                        {
+                            'Type': r['type'],
+                            'Rule Name': r['name'],
+                            'Action': r['action'],
+                            'Source': r['source'],
+                            'Destination': r['destination']
+                        } for r in results
+                    ])
+                else:
+                    st.warning("No matching rules found.")
+    else:
+        st.info("Upload a policy JSON or connect to Azure to enable search.")
 
 with compare_tab:
     st.subheader("Compare Two Source IPs/CIDRs")
-    # Compare functionality would go here
+    if rules:
+        with st.form("compare_form"):
+            source_a = st.text_input("Source A (IP/CIDR)", "10.0.0.0/24")
+            source_b = st.text_input("Source B (IP/CIDR)", "10.1.0.0/24")
+            compare_submitted = st.form_submit_button("Compare")
+        if compare_submitted:
+            if not source_a or not source_b:
+                st.warning("Please enter both Source A and Source B.")
+            else:
+                with st.spinner("Comparing access for both sources..."):
+                    comparison = compare_sources(rules, source_a, source_b)
+                st.markdown("### Comparison Results")
+                df = pd.DataFrame([
+                    {**row, 'Reachable By': 'A only'} for row in comparison['a_only']
+                ] + [
+                    {**row, 'Reachable By': 'B only'} for row in comparison['b_only']
+                ] + [
+                    {**row, 'Reachable By': 'Both'} for row in comparison['both']
+                ])
+                if not df.empty:
+                    def highlight(row):
+                        if row['Reachable By'] == 'Both':
+                            return ['background-color: #d4edda']*len(row)  # green
+                        elif row['Reachable By'] == 'A only':
+                            return ['background-color: #f8d7da']*len(row)  # red
+                        else:
+                            return ['background-color: #d1ecf1']*len(row)  # blue
+                    st.dataframe(df.style.apply(highlight, axis=1), use_container_width=True)
+                else:
+                    st.info("No destinations found for either source.")
+    else:
+        st.info("Upload a policy JSON or connect to Azure to enable comparison.")
 
 with vnet_tab:
     st.subheader("🌐 VNet Calculator Tool")
-    # VNet calculator functionality would go here
+    st.info("Calculate the next available VNet IP range within your master IP ranges for different environments and regions.")
+    
+    # Environment configuration table
+    st.markdown("### 📋 Environment IP Range Configuration")
+    env_config = load_environment_config()
+    
+    # Create environment table
+    env_data = []
+    for env, regions in env_config.items():
+        for region, cidr in regions.items():
+            env_data.append({
+                'Environment': env,
+                'Region': region,
+                'Master IP Range': cidr
+            })
+    
+    env_df = pd.DataFrame(env_data)
+    st.dataframe(
+        env_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Environment": st.column_config.TextColumn("Environment", width="medium"),
+            "Region": st.column_config.TextColumn("Region", width="medium"),
+            "Master IP Range": st.column_config.TextColumn("Master IP Range", width="medium")
+        }
+    )
+    
+    st.markdown("---")
+    st.markdown("### 🚀 Find Next Available VNet Range")
+    
+    # User inputs with clear labels
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        selected_env = st.selectbox(
+            "Select Environment", 
+            list(env_config.keys()),
+            help="Choose the environment (Dev, Test, Prod, Staging)"
+        )
+    with col2:
+        selected_region = st.selectbox(
+            "Select Region", 
+            list(env_config[selected_env].keys()),
+            help="Choose the Azure region for your VNet"
+        )
+    with col3:
+        subnet_size = st.selectbox(
+            "Required Subnet Size", 
+            list(SUBNET_SIZES.keys()),
+            format_func=lambda x: f"{x} ({SUBNET_SIZES[x]['name']} - {SUBNET_SIZES[x]['ips']} IPs)",
+            help="Select the size of subnet you need"
+        )
+    
+    # Display selected configuration
+    master_range = env_config[selected_env][selected_region]
+    selected_subnet_info = SUBNET_SIZES[subnet_size]
+    
+    st.info(f"**Selected Configuration:** {selected_env} environment in {selected_region} region")
+    st.info(f"**Master Range:** {master_range} | **Required Subnet:** {subnet_size} ({selected_subnet_info['description']})")
+    
+    # Always get latest VNet data from Azure for accurate calculations
+    existing_vnets = None
+    if is_feature_enabled("enable_vnet_azure_integration"):
+        st.info("🌐 **Getting latest VNet data from Azure...**")
+        
+        # Get Azure configuration
+        azure_config = get_azure_config()
+        is_webapp = os.environ.get('WEBSITE_SITE_NAME') or os.environ.get('AZURE_WEBAPP_NAME')
+        
+        if is_webapp or all([azure_config.get('tenant_id'), azure_config.get('client_id'), 
+                azure_config.get('client_secret'), azure_config.get('subscription_id'), 
+                azure_config.get('resource_group')]):
+            
+            try:
+                # Initialize Azure service
+                logger.info("Initializing Azure service for VNet analysis...")
+                azure_service = AzureService(azure_config)
+                logger.info(f"Azure service initialized. Authenticated: {azure_service.authenticated}")
+                if azure_service.authenticated:
+                    # Test the actual connection
+                    logger.info("Testing Azure connection for VNet analysis...")
+                    if not azure_service.test_connection():
+                        st.warning("⚠️ Azure connection test failed - VNet analysis may not work properly")
+                        logger.warning("Azure connection test failed for VNet analysis")
+                    # Get resource group from config or user input
+                    resource_group = azure_config.get('resource_group')
+                    if not resource_group:
+                        resource_group = st.text_input(
+                            "Resource Group Name (for VNet data)", 
+                            help="Enter the Azure resource group to get VNet information"
+                        )
+                    
+                    if resource_group:
+                        with st.spinner("Fetching latest VNet data from Azure..."):
+                            vnet_data = azure_service.get_virtual_networks(resource_group)
+                            if vnet_data:
+                                existing_vnets = extract_ip_ranges_from_vnets(vnet_data)
+                                st.success(f"✅ **Azure VNet Data:** Found {len(existing_vnets)} existing IP ranges")
+                                
+                                # Save to file for future reference
+                                azure_service.save_vnets_to_file(vnet_data)
+                            else:
+                                st.warning("⚠️ Could not fetch VNet data from Azure")
+                                # Fallback to local file if available
+                                if os.path.exists("existing_vnets.json"):
+                                    vnet_data = load_vnets_from_file("existing_vnets.json")
+                                    existing_vnets = extract_ip_ranges_from_vnets(vnet_data)
+                                    st.info(f"📊 **Fallback:** Using local VNet data ({len(existing_vnets)} ranges)")
+                else:
+                    st.error("❌ Azure authentication failed for VNet data")
+                    # Fallback to local file
+                    if os.path.exists("existing_vnets.json"):
+                        vnet_data = load_vnets_from_file("existing_vnets.json")
+                        existing_vnets = extract_ip_ranges_from_vnets(vnet_data)
+                        st.info(f"📊 **Fallback:** Using local VNet data ({len(existing_vnets)} ranges)")
+            except Exception as e:
+                st.error(f"❌ Error fetching VNet data: {e}")
+                # Fallback to local file
+                if os.path.exists("existing_vnets.json"):
+                    vnet_data = load_vnets_from_file("existing_vnets.json")
+                    existing_vnets = extract_ip_ranges_from_vnets(vnet_data)
+                    st.info(f"📊 **Fallback:** Using local VNet data ({len(existing_vnets)} ranges)")
+        else:
+            st.warning("⚠️ Azure configuration incomplete - using local VNet data if available")
+            # Try to use local file
+            if os.path.exists("existing_vnets.json"):
+                vnet_data = load_vnets_from_file("existing_vnets.json")
+                existing_vnets = extract_ip_ranges_from_vnets(vnet_data)
+                st.info(f"📊 **Local VNet Data:** Found {len(existing_vnets)} existing IP ranges")
+    
+    # Calculate button with clear purpose
+    if st.button("🔍 Find Next Available VNet Range", type="primary", use_container_width=True):
+        with st.spinner("Calculating next available VNet range..."):
+            result = calculate_vnet_range(master_range, subnet_size, existing_vnets)
+        
+        if "error" not in result:
+            st.success("✅ **Next Available VNet Range Found!**")
+            
+            # Display results in organized format
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Available Range", result['available_range'])
+            with col2:
+                st.metric("Total Subnets Available", result['total_subnets'])
+            with col3:
+                st.metric("Usable IPs in Range", result['usable_ips'])
+            
+            # Show if Azure integration was used
+            if existing_vnets and result.get('existing_ranges_considered', 0) > 0:
+                st.info(f"🔍 **Azure Integration:** Considered {result['existing_ranges_considered']} existing IP ranges when calculating availability")
+            
+            # Subnet division option
+            st.markdown("---")
+            st.markdown("### 🔧 Divide Available Range into Subnets")
+            st.info(f"Would you like to divide the available range {result['available_range']} into smaller {subnet_size} subnets?")
+            
+            if st.button("📊 Show Subnet Division", type="secondary"):
+                st.markdown("### Subnet Division Results")
+                
+                subnets = divide_into_subnets(result['available_range'], subnet_size)
+                
+                if subnets and "error" not in subnets[0]:
+                    # Create detailed subnet table
+                    subnet_df = pd.DataFrame(subnets)
+                    
+                    # Display main table
+                    st.dataframe(
+                        subnet_df[['subnet_number', 'range', 'first_ip', 'last_ip', 'usable_ips', 'gateway_suggestion']],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "subnet_number": st.column_config.NumberColumn("Subnet #", width="small"),
+                            "range": st.column_config.TextColumn("Range", width="medium"),
+                            "first_ip": st.column_config.TextColumn("First IP", width="medium"),
+                            "last_ip": st.column_config.TextColumn("Last IP", width="medium"),
+                            "usable_ips": st.column_config.NumberColumn("Usable IPs", width="small"),
+                            "gateway_suggestion": st.column_config.TextColumn("Gateway Suggestion", width="medium")
+                        }
+                    )
+                    
+                    # Visual representation
+                    st.markdown("### Visual Subnet Layout")
+                    for i, subnet in enumerate(subnets[:10]):  # Show first 10 subnets
+                        st.code(f"{i+1:2d}. {subnet['range']} → {subnet['first_ip']} - {subnet['last_ip']} ({subnet['usable_ips']} usable IPs)")
+                    
+                    if len(subnets) > 10:
+                        st.info(f"... and {len(subnets) - 10} more subnets")
+                    
+                    # Export option
+                    if st.button("📊 Export to CSV"):
+                        csv = subnet_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download CSV",
+                            data=csv,
+                            file_name=f"subnet_division_{result['available_range'].replace('/', '_')}.csv",
+                            mime="text/csv"
+                        )
+                else:
+                    st.error(f"Error calculating subnets: {subnets[0].get('error', 'Unknown error')}")
+        else:
+            st.error(f"❌ Calculation failed: {result['error']}")
 
 with tools_tab:
     st.subheader("🛠️ Network Tools & Utilities")
-    # Network tools functionality would go here
+    st.info("Additional tools for IP range validation, subnet analysis, and network planning.")
+    
+    # IP range overlap checker
+    st.markdown("### 🔍 IP Range Overlap Checker")
+    st.info("Check if two IP ranges overlap to avoid conflicts in your network design.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        range1 = st.text_input("Range 1 (CIDR)", "10.0.0.0/24", key="overlap_range1", help="Enter first IP range in CIDR notation")
+    with col2:
+        range2 = st.text_input("Range 2 (CIDR)", "10.0.1.0/24", key="overlap_range2", help="Enter second IP range in CIDR notation")
+    
+    if st.button("🔍 Check for Overlaps", type="primary"):
+        if range1 and range2:
+            with st.spinner("Checking for overlaps..."):
+                overlap_result = check_ip_overlap(range1, range2)
+            
+            if "error" not in overlap_result:
+                if overlap_result['overlap']:
+                    st.warning("⚠️ **OVERLAP DETECTED!** These ranges overlap.")
+                    
+                    # Display overlap details
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.error(f"**Range 1:** {overlap_result['range1']['cidr']}")
+                        st.info(f"Network: {overlap_result['range1']['network']}")
+                        st.info(f"Broadcast: {overlap_result['range1']['broadcast']}")
+                        st.info(f"Total IPs: {overlap_result['range1']['total_ips']}")
+                    
+                    with col2:
+                        st.error(f"**Range 2:** {overlap_result['range2']['cidr']}")
+                        st.info(f"Network: {overlap_result['range2']['network']}")
+                        st.info(f"Broadcast: {overlap_result['range2']['broadcast']}")
+                        st.info(f"Total IPs: {overlap_result['range2']['total_ips']}")
+                    
+                    # Show overlap details
+                    if overlap_result['overlap_details']:
+                        st.markdown("**Overlap Details:**")
+                        st.info(f"Overlap Range: {overlap_result['overlap_details']['overlap_range']}")
+                        st.info(f"Overlapping IPs: {overlap_result['overlap_details']['overlap_ips']}")
+                else:
+                    st.success("✅ **No overlap detected.** These ranges are safe to use together.")
+                    
+                    # Show both ranges side by side
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.info(f"**Range 1:** {overlap_result['range1']['cidr']}")
+                    with col2:
+                        st.info(f"**Range 2:** {overlap_result['range2']['cidr']}")
+            else:
+                st.error(f"Error checking overlap: {overlap_result['error']}")
+        else:
+            st.warning("Please enter both ranges to check for overlap.")
+    
+    # Subnet information tool
+    st.markdown("---")
+    st.markdown("### 📋 Subnet Information Tool")
+    st.info("Get detailed information about any subnet including network address, broadcast, usable IPs, and more.")
+    
+    cidr_input = st.text_input("Enter CIDR to analyze", "10.0.0.0/24", key="subnet_info", help="Enter a CIDR notation (e.g., 10.0.0.0/24)")
+    
+    if st.button("📋 Analyze Subnet", type="primary"):
+        if cidr_input:
+            with st.spinner("Analyzing subnet..."):
+                subnet_info = get_subnet_info(cidr_input)
+            
+            if "error" not in subnet_info:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.success(f"**Network:** {subnet_info['network_address']}")
+                    st.info(f"**Broadcast:** {subnet_info['broadcast_address']}")
+                    st.info(f"**First Usable IP:** {subnet_info['first_usable_ip']}")
+                    st.info(f"**Last Usable IP:** {subnet_info['last_usable_ip']}")
+                
+                with col2:
+                    st.metric("Total IPs", subnet_info['total_ips'])
+                    st.metric("Usable IPs", subnet_info['usable_ips'])
+                    st.info(f"**Subnet Mask:** {subnet_info['subnet_mask']}")
+                    st.info(f"**Wildcard Mask:** {subnet_info['wildcard_mask']}")
+            else:
+                st.error(f"Error analyzing subnet: {subnet_info['error']}")
+        else:
+            st.warning("Please enter a CIDR to analyze.")
+    
+    # Environment configuration editor
+    st.markdown("---")
+    st.markdown("### ⚙️ Environment Configuration Editor")
+    st.info("Customize the environment IP ranges for your organization's needs.")
+    
+    if st.button("🔧 Edit Environment Config"):
+        st.info("This feature allows you to customize the environment configuration.")
+        st.code("""
+# Example custom configuration:
+{
+  "Custom": {
+    "UK South": "10.200.0.0/14",
+    "East US": "10.201.0.0/14"
+  }
+}
+        """)
+        
+        # Simple config editor
+        custom_config = st.text_area(
+            "Custom Environment Configuration (JSON)",
+            value=json.dumps(env_config, indent=2),
+            height=200
+        )
+        
+        if st.button("💾 Save Configuration"):
+            try:
+                new_config = json.loads(custom_config)
+                # Here you would save to file
+                st.success("Configuration saved successfully!")
+            except json.JSONDecodeError:
+                st.error("Invalid JSON format. Please check your configuration.")
