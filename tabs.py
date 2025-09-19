@@ -23,23 +23,23 @@ def render_search_tab(rules):
         
         with col1:
             source_ip = st.text_input(
-                "Source IP Address",
-                placeholder="e.g., 10.0.1.100",
-                help="Enter the source IP address to check"
+                "Source IP Address (Optional)",
+                placeholder="e.g., 10.0.1.100 or 10.0.0.0/24",
+                help="Enter the source IP address or CIDR to check (optional)"
             )
         
         with col2:
             destination_ip = st.text_input(
                 "Destination IP Address (Optional)",
-                placeholder="e.g., 8.8.8.8",
-                help="Enter the destination IP address to check (optional)"
+                placeholder="e.g., 8.8.8.8 or api.sendgrid.com",
+                help="Enter the destination IP address or FQDN to check (optional)"
             )
         
         search_button = st.form_submit_button("🔍 Search Rules", use_container_width=True)
     
     if search_button:
-        if not source_ip:
-            st.warning("⚠️ Please enter at least a source IP address")
+        if not source_ip and not destination_ip:
+            st.warning("⚠️ Please enter at least a source IP address or destination IP address")
             return
         
         # Perform search
@@ -76,8 +76,10 @@ def search_rules(rules, source_ip, destination_ip):
 
 def matches_network_rule(rule, source_ip, destination_ip):
     """Check if a network rule matches the search criteria"""
-    # Always check source IP (required)
-    source_matches = any(source_ip in addr for addr in rule.get('sourceAddresses', []))
+    # Check source IP only if provided
+    source_matches = True
+    if source_ip:
+        source_matches = any(source_ip in addr for addr in rule.get('sourceAddresses', []))
     
     # Check destination IP only if provided
     dest_matches = True
@@ -88,8 +90,10 @@ def matches_network_rule(rule, source_ip, destination_ip):
 
 def matches_application_rule(rule, source_ip, destination_ip):
     """Check if an application rule matches the search criteria"""
-    # Always check source IP (required)
-    source_matches = any(source_ip in addr for addr in rule.get('sourceAddresses', []))
+    # Check source IP only if provided
+    source_matches = True
+    if source_ip:
+        source_matches = any(source_ip in addr for addr in rule.get('sourceAddresses', []))
     
     # Check destination FQDN only if provided
     dest_matches = True
@@ -191,7 +195,7 @@ def compare_sources(rules, source_a, source_b):
                             'Ports': ', '.join(rule.get('destinationPorts', [])),
                             'Protocol': ', '.join(rule.get('ipProtocols', [])),
                             'Action': rule.get('ruleType', 'N/A'),
-                            'Priority': rule.get('priority', 'N/A')
+                            'Source': source  # Add source for clarity
                         })
         
         # Check application rules
@@ -206,7 +210,7 @@ def compare_sources(rules, source_a, source_b):
                             'Ports': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])]),
                             'Protocol': 'Application',
                             'Action': rule.get('ruleType', 'N/A'),
-                            'Priority': rule.get('priority', 'N/A')
+                            'Source': source  # Add source for clarity
                         })
         
         return destinations
@@ -219,10 +223,21 @@ def compare_sources(rules, source_a, source_b):
     dest_a_set = set(row['Destination'] for row in dest_a)
     dest_b_set = set(row['Destination'] for row in dest_b)
     
-    # Categorize destinations
+    # Categorize destinations - show both rules when they reach the same destination
     a_only = [row for row in dest_a if row['Destination'] not in dest_b_set]
     b_only = [row for row in dest_b if row['Destination'] not in dest_a_set]
-    both = [row for row in dest_a if row['Destination'] in dest_b_set]
+    
+    # For "both" category, show both rules that reach the same destination
+    both = []
+    for dest_a_row in dest_a:
+        if dest_a_row['Destination'] in dest_b_set:
+            # Find ALL corresponding rules from source B that reach the same destination
+            dest_b_rows = [row for row in dest_b if row['Destination'] == dest_a_row['Destination']]
+            if dest_b_rows:
+                # Add the rule from source A
+                both.append(dest_a_row)
+                # Add all rules from source B that reach the same destination
+                both.extend(dest_b_rows)
     
     return {
         'a_only': a_only,
@@ -248,19 +263,46 @@ def render_compare_tab(rules):
                     comparison = compare_sources(rules, source_a, source_b)
                 
                 st.markdown("### Comparison Results")
-                df = pd.DataFrame([
-                    {**row, 'Reachable By': 'A only'} for row in comparison['a_only']
-                ] + [
-                    {**row, 'Reachable By': 'B only'} for row in comparison['b_only']
-                ] + [
-                    {**row, 'Reachable By': 'Both'} for row in comparison['both']
-                ])
+                
+                # Create the dataframe with better labeling
+                all_results = []
+                
+                # A only results
+                for row in comparison['a_only']:
+                    all_results.append({
+                        **row, 
+                        'Reachable By': f'A only ({source_a})',
+                        'Source IP': source_a
+                    })
+                
+                # B only results  
+                for row in comparison['b_only']:
+                    all_results.append({
+                        **row,
+                        'Reachable By': f'B only ({source_b})',
+                        'Source IP': source_b
+                    })
+                
+                # Both results - show which rule each source uses
+                for row in comparison['both']:
+                    if row['Source'] == source_a:
+                        reachable_by = f'Both (A: {source_a})'
+                    else:
+                        reachable_by = f'Both (B: {source_b})'
+                    
+                    all_results.append({
+                        **row,
+                        'Reachable By': reachable_by,
+                        'Source IP': row['Source']
+                    })
+                
+                df = pd.DataFrame(all_results)
                 
                 if not df.empty:
                     def highlight(row):
-                        if row['Reachable By'] == 'Both':
+                        if 'Both' in row['Reachable By']:
                             return ['background-color: #d4edda']*len(row)  # green
-                        elif row['Reachable By'] == 'A only':
+                        elif 'A only' in row['Reachable By']:
                             return ['background-color: #f8d7da']*len(row)  # red
                         else:
                             return ['background-color: #d1ecf1']*len(row)  # blue
