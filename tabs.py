@@ -23,16 +23,16 @@ def render_search_tab(rules):
         
         with col1:
             source_ip = st.text_input(
-                "Source IP Address (Optional)",
-                placeholder="e.g., 10.0.1.100 or 10.0.0.0/24",
-                help="Enter the source IP address or CIDR to check (optional)"
+                "Source IP/ServiceTag (Optional)",
+                placeholder="e.g., 10.0.1.100, 10.0.0.0/24, or AzureCloud",
+                help="Enter the source IP address, CIDR, or Service Tag to check (optional)"
             )
         
         with col2:
             destination_ip = st.text_input(
-                "Destination IP Address (Optional)",
-                placeholder="e.g., 8.8.8.8 or api.sendgrid.com",
-                help="Enter the destination IP address or FQDN to check (optional)"
+                "Destination IP/FQDN/ServiceTag (Optional)",
+                placeholder="e.g., 8.8.8.8, api.sendgrid.com, or AzureCloud",
+                help="Enter the destination IP address, FQDN, or Service Tag to check (optional)"
             )
         
         search_button = st.form_submit_button("🔍 Search Rules", use_container_width=True)
@@ -79,12 +79,25 @@ def matches_network_rule(rule, source_ip, destination_ip):
     # Check source IP only if provided
     source_matches = True
     if source_ip:
-        source_matches = any(source_ip in addr for addr in rule.get('sourceAddresses', []))
+        # Check source addresses, IP groups, and service tags
+        source_addresses = rule.get('sourceAddresses', [])
+        source_ip_groups = rule.get('sourceIpGroups', [])
+        source_service_tags = rule.get('sourceServiceTags', [])
+        all_sources = source_addresses + source_ip_groups + source_service_tags
+        
+        source_matches = any(source_ip in addr for addr in all_sources)
     
-    # Check destination IP only if provided
+    # Check destination IP/FQDN/ServiceTag only if provided
     dest_matches = True
     if destination_ip:
-        dest_matches = any(destination_ip in addr for addr in rule.get('destinationAddresses', []))
+        # Check IP addresses, FQDN destinations, IP Groups, and Service Tags
+        ip_destinations = rule.get('destinationAddresses', [])
+        fqdn_destinations = rule.get('destinationFqdns', [])
+        ip_group_destinations = rule.get('destinationIpGroups', [])
+        service_tag_destinations = rule.get('destinationServiceTags', [])
+        all_destinations = ip_destinations + fqdn_destinations + ip_group_destinations + service_tag_destinations
+        
+        dest_matches = any(destination_ip in dest for dest in all_destinations)
     
     return source_matches and dest_matches
 
@@ -93,12 +106,24 @@ def matches_application_rule(rule, source_ip, destination_ip):
     # Check source IP only if provided
     source_matches = True
     if source_ip:
-        source_matches = any(source_ip in addr for addr in rule.get('sourceAddresses', []))
+        # Check source addresses, IP groups, and service tags
+        source_addresses = rule.get('sourceAddresses', [])
+        source_ip_groups = rule.get('sourceIpGroups', [])
+        source_service_tags = rule.get('sourceServiceTags', [])
+        all_sources = source_addresses + source_ip_groups + source_service_tags
+        
+        source_matches = any(source_ip in addr for addr in all_sources)
     
-    # Check destination FQDN only if provided
+    # Check destination FQDN/ServiceTag only if provided
     dest_matches = True
     if destination_ip:
-        dest_matches = any(destination_ip in fqdn for fqdn in rule.get('targetFqdns', []))
+        # Check FQDN destinations, URLs, and Service Tags
+        fqdn_destinations = rule.get('targetFqdns', [])
+        url_destinations = rule.get('targetUrls', [])
+        service_tag_destinations = rule.get('destinationServiceTags', [])
+        all_destinations = fqdn_destinations + url_destinations + service_tag_destinations
+        
+        dest_matches = any(destination_ip in dest for dest in all_destinations)
     
     return source_matches and dest_matches
 
