@@ -275,3 +275,4 @@ def render_download_section(policy_data, policy_source, enabled=True):
             mime="application/json",
             help="Download the raw Azure Firewall Policy data as JSON"
         )
+        
