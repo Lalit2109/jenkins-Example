@@ -218,6 +218,7 @@ def render_rule_tables(rules):
         if all_rules_data:
             import pandas as pd
             all_rules_df = pd.DataFrame(all_rules_data)
+            all_rules_df.index = range(1, len(all_rules_df) + 1)
             st.dataframe(all_rules_df, use_container_width=True)
         else:
             st.info("No rules found")
@@ -237,7 +238,10 @@ def create_network_rules_dataframe(network_rules):
             'Action': rule.get('ruleType', 'N/A')
         })
     
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    if not df.empty:
+        df.index = range(1, len(df) + 1)
+    return df
 
 def create_application_rules_dataframe(app_rules):
     """Create a DataFrame for application rules"""
@@ -253,7 +257,10 @@ def create_application_rules_dataframe(app_rules):
             'Action': rule.get('ruleType', 'N/A')
         })
     
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    if not df.empty:
+        df.index = range(1, len(df) + 1)
+    return df
 
 def render_download_section(policy_data, policy_source, enabled=True):
     """Render the download section for policy data"""
