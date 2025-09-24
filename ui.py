@@ -195,8 +195,8 @@ def render_rule_tables(rules):
                 all_rules_data.append({
                     'Type': 'Network',
                     'Name': rule.get('name', 'N/A'),
-                    'Source': ', '.join(rule.get('sourceAddresses', [])),
-                    'Destination': ', '.join(rule.get('destinationAddresses', [])),
+                    'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+                    'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
                     'Ports': ', '.join(rule.get('destinationPorts', [])),
                     'Protocol': ', '.join(rule.get('ipProtocols', [])),
                     'Action': rule.get('ruleType', 'N/A')
@@ -208,8 +208,8 @@ def render_rule_tables(rules):
                 all_rules_data.append({
                     'Type': 'Application',
                     'Name': rule.get('name', 'N/A'),
-                    'Source': ', '.join(rule.get('sourceAddresses', [])),
-                    'Destination': ', '.join(rule.get('targetFqdns', [])),
+                    'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+                    'Destination': ', '.join(rule.get('targetFqdns', []) + rule.get('targetUrls', [])),
                     'Ports': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])]),
                     'Protocol': 'Application',
                     'Action': rule.get('ruleType', 'N/A')
@@ -230,8 +230,8 @@ def create_network_rules_dataframe(network_rules):
     for rule in network_rules:
         data.append({
             'Name': rule.get('name', 'N/A'),
-            'Source': ', '.join(rule.get('sourceAddresses', [])),
-            'Destination': ', '.join(rule.get('destinationAddresses', [])),
+            'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+            'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
             'Ports': ', '.join(rule.get('destinationPorts', [])),
             'Protocol': ', '.join(rule.get('ipProtocols', [])),
             'Action': rule.get('ruleType', 'N/A')
@@ -247,8 +247,8 @@ def create_application_rules_dataframe(app_rules):
     for rule in app_rules:
         data.append({
             'Name': rule.get('name', 'N/A'),
-            'Source': ', '.join(rule.get('sourceAddresses', [])),
-            'Target FQDNs': ', '.join(rule.get('targetFqdns', [])),
+            'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+            'Target FQDNs': ', '.join(rule.get('targetFqdns', []) + rule.get('targetUrls', [])),
             'Protocols': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])]),
             'Action': rule.get('ruleType', 'N/A')
         })
@@ -275,4 +275,3 @@ def render_download_section(policy_data, policy_source, enabled=True):
             mime="application/json",
             help="Download the raw Azure Firewall Policy data as JSON"
         )
-        
