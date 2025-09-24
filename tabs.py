@@ -150,6 +150,8 @@ def display_search_results(results):
             }
             for rule in results['network_rules']
         ])
+        if not network_df.empty:
+            network_df.index = range(1, len(network_df) + 1)
         st.dataframe(network_df, use_container_width=True)
     
     if results['application_rules']:
@@ -163,6 +165,8 @@ def display_search_results(results):
             }
             for rule in results['application_rules']
         ])
+        if not app_df.empty:
+            app_df.index = range(1, len(app_df) + 1)
         st.dataframe(app_df, use_container_width=True)
     
     if results['blocked_rules']:
@@ -176,6 +180,8 @@ def display_search_results(results):
             }
             for rule in results['blocked_rules']
         ])
+        if not blocked_df.empty:
+            blocked_df.index = range(1, len(blocked_df) + 1)
         st.dataframe(blocked_df, use_container_width=True)
 
 def compare_sources(rules, source_a, source_b):
@@ -324,6 +330,7 @@ def render_compare_tab(rules):
                 df = pd.DataFrame(all_results)
                 
                 if not df.empty:
+                    df.index = range(1, len(df) + 1)
                     def highlight(row):
                         if 'Both' in row['Reachable By']:
                             return ['background-color: #d4edda']*len(row)  # green
@@ -716,6 +723,8 @@ def render_tools_tab():
                     {"Port": port, "Service": get_service_name(port), "Status": "Open"}
                     for port in open_ports
                 ])
+                if not open_df.empty:
+                    open_df.index = range(1, len(open_df) + 1)
                 st.dataframe(open_df, use_container_width=True)
             
         except ValueError as e:
