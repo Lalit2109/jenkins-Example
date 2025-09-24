@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 import logging
 
+logger = logging.getLogger(__name__)
+
 # Check if we're in local mode first
 IS_LOCAL_MODE = os.environ.get('STREAMLIT_ENVIRONMENT', '').lower() == 'local'
 
@@ -22,7 +24,7 @@ if not IS_LOCAL_MODE:
         from azure.core.exceptions import AzureError
         AZURE_SDK_AVAILABLE = True
     except ImportError as e:
-        print(f"Azure SDK not available: {e}")
+        logger.warning(f"Azure SDK not available: {e}")
         AZURE_SDK_AVAILABLE = False
 else:
     AZURE_SDK_AVAILABLE = False
@@ -46,17 +48,6 @@ logging.getLogger('azure.core').setLevel(logging.WARNING)
 logging.getLogger('azure.mgmt').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-# Safe logging function
-def safe_log(level, message):
-    """Safely log messages, handling both Streamlit and non-Streamlit contexts"""
-    if logger:
-        if level == 'info':
-            logger.info(message)
-        elif level == 'warning':
-            logger.warning(message)
-        elif level == 'error':
-            logger.error(message)
-    # In Streamlit context, we could use st.write but it's not necessary for these internal logs
 
 class AzureService:
     def __init__(self, config: Dict[str, str] = None):
@@ -160,7 +151,7 @@ class AzureService:
                 if not self.subscription_id:
                     logger.warning("No subscription ID provided - Azure API calls will fail")
                 self.authenticated = False
-            
+                
         except Exception as e:
             logger.error(f"Failed to setup Azure authentication: {str(e)}")
             self.authenticated = False
@@ -182,7 +173,7 @@ class AzureService:
         if not self.authenticated:
             logger.error("Not authenticated with Azure")
             return None
-            
+        
         try:
             # Use provided subscription or instance subscription
             sub_id = subscription_id or self.subscription_id
@@ -253,11 +244,17 @@ class AzureService:
                                             'type': rule.action.type if hasattr(rule, 'action') and rule.action else None
                                         },
                                         'sourceAddresses': rule.source_addresses if hasattr(rule, 'source_addresses') else [],
+                                        'sourceIpGroups': rule.source_ip_groups if hasattr(rule, 'source_ip_groups') else [],
+                                        'sourceServiceTags': rule.source_service_tags if hasattr(rule, 'source_service_tags') else [],
                                         'destinationAddresses': rule.destination_addresses if hasattr(rule, 'destination_addresses') else [],
+                                        'destinationFqdns': rule.destination_fqdns if hasattr(rule, 'destination_fqdns') else [],
+                                        'destinationIpGroups': rule.destination_ip_groups if hasattr(rule, 'destination_ip_groups') else [],
+                                        'destinationServiceTags': rule.destination_service_tags if hasattr(rule, 'destination_service_tags') else [],
                                         'destinationPorts': rule.destination_ports if hasattr(rule, 'destination_ports') else [],
                                         'ipProtocols': rule.ip_protocols if hasattr(rule, 'ip_protocols') else [],
                                         'fqdnTags': rule.fqdn_tags if hasattr(rule, 'fqdn_tags') else [],
-                                        'targetFqdns': rule.target_fqdns if hasattr(rule, 'target_fqdns') else []
+                                        'targetFqdns': rule.target_fqdns if hasattr(rule, 'target_fqdns') else [],
+                                        'targetUrls': rule.target_urls if hasattr(rule, 'target_urls') else []
                                     }
                                     rule_collection_dict['rules'].append(rule_dict)
                             
@@ -267,11 +264,11 @@ class AzureService:
             except Exception as e:
                 logger.warning(f"Failed to get rule collection groups for policy {policy_name}: {str(e)}")
                 # Continue with empty rule collection groups
-            
-            # Add metadata
+                
+                # Add metadata
             policy_dict['metadata'] = {
-                'fetched_at': datetime.now().isoformat(),
-                'policy_name': policy_name,
+                        'fetched_at': datetime.now().isoformat(),
+                        'policy_name': policy_name,
                 'resource_group': resource_group_name,
                 'subscription_id': sub_id,
                 'source': 'azure_sdk',
@@ -299,7 +296,7 @@ class AzureService:
         except Exception as e:
             logger.error(f"Unexpected error getting firewall policy: {str(e)}")
             return None
-
+    
     def get_firewall_policies(self, resource_group_name: str) -> List[Dict[str, Any]]:
         """
         Get all firewall policies from a resource group
@@ -480,7 +477,7 @@ class AzureService:
         except Exception as e:
             logger.error(f"Azure connection test failed: {str(e)}")
             return False
-
+    
     def save_policy_to_file(self, policy_data: Dict[str, Any], filename: str = "firewall_policy.json"):
         """
         Save policy data to JSON file
@@ -495,7 +492,7 @@ class AzureService:
             logger.info(f"Policy saved to {filename}")
         except Exception as e:
             logger.error(f"Error saving policy: {e}")
-
+    
     def save_vnets_to_file(self, vnet_data: List[Dict[str, Any]], filename: str = "existing_vnets.json"):
         """
         Save VNet data to JSON file
@@ -510,6 +507,31 @@ class AzureService:
             logger.info(f"VNet data saved to {filename}")
         except Exception as e:
             logger.error(f"Error saving VNet data: {e}")
+    
+    def get_existing_vnets(self, resource_group_name: str = None) -> List[Dict[str, Any]]:
+        """
+        Get existing virtual networks (alias for get_virtual_networks)
+        
+        Args:
+            resource_group_name: Name of the resource group
+            
+        Returns:
+            List of virtual network dictionaries
+        """
+        if not resource_group_name:
+            resource_group_name = self.config.get('resource_group', '')
+        
+        return self.get_virtual_networks(resource_group_name)
+    
+    def get_policy_name(self) -> str:
+        """
+        Get the firewall policy name from configuration
+        
+        Returns:
+            Policy name or 'Unknown Policy'
+        """
+        return self.config.get('firewall_policy_name', 'Unknown Policy')
+    
 
 # Legacy functions for backward compatibility
 def load_policy_from_file(file_path: str) -> Dict[str, Any]:
@@ -537,4 +559,3 @@ def get_file_creation_time(file_path: str) -> Optional[datetime]:
     except Exception as e:
         logger.error(f"Failed to get file creation time for {file_path}: {str(e)}")
         return None
-        
