@@ -23,22 +23,22 @@ def render_search_tab(rules):
         
         with col1:
             source_ip = st.text_input(
-                "Source IP/ServiceTag (Optional)",
-                placeholder="e.g., 10.0.1.100, 10.0.0.0/24, or AzureCloud",
-                help="Enter the source IP address, CIDR, or Service Tag to check (optional)"
+                "Source IP (Optional)",
+                placeholder="e.g., 10.0.1.100 or 10.0.0.0/24",
+                help="Enter the source IP address or CIDR to check (optional)"
             )
         
         with col2:
             destination_ip = st.text_input(
-                "Destination IP/FQDN/ServiceTag (Optional)",
-                placeholder="e.g., 8.8.8.8, api.sendgrid.com, or AzureCloud",
-                help="Enter the destination IP address, FQDN, or Service Tag to check (optional)"
+                "Destination IP/FQDN (Optional)",
+                placeholder="e.g., 8.8.8.8 or api.sendgrid.com",
+                help="Enter the destination IP address or FQDN to check (optional)"
             )
         
         search_button = st.form_submit_button("🔍 Search Rules", use_container_width=True)
     
     if search_button:
-        if not source_ip and not destination_ip:
+        if not source_ip.strip() and not destination_ip.strip():
             st.warning("⚠️ Please enter at least a source IP address or destination IP address")
             return
         
@@ -78,8 +78,8 @@ def matches_network_rule(rule, source_ip, destination_ip):
     """Check if a network rule matches the search criteria"""
     # Check source IP only if provided
     source_matches = True
-    if source_ip:
-        # Check source addresses, IP groups, and service tags
+    if source_ip and source_ip.strip():
+        # Check all possible source fields that actually exist
         source_addresses = rule.get('sourceAddresses', [])
         source_ip_groups = rule.get('sourceIpGroups', [])
         source_service_tags = rule.get('sourceServiceTags', [])
@@ -87,10 +87,10 @@ def matches_network_rule(rule, source_ip, destination_ip):
         
         source_matches = any(source_ip in addr for addr in all_sources)
     
-    # Check destination IP/FQDN/ServiceTag only if provided
+    # Check destination IP/FQDN only if provided
     dest_matches = True
-    if destination_ip:
-        # Check IP addresses, FQDN destinations, IP Groups, and Service Tags
+    if destination_ip and destination_ip.strip():
+        # Check all possible destination fields that actually exist
         ip_destinations = rule.get('destinationAddresses', [])
         fqdn_destinations = rule.get('destinationFqdns', [])
         ip_group_destinations = rule.get('destinationIpGroups', [])
@@ -105,8 +105,8 @@ def matches_application_rule(rule, source_ip, destination_ip):
     """Check if an application rule matches the search criteria"""
     # Check source IP only if provided
     source_matches = True
-    if source_ip:
-        # Check source addresses, IP groups, and service tags
+    if source_ip and source_ip.strip():
+        # Check all possible source fields that actually exist
         source_addresses = rule.get('sourceAddresses', [])
         source_ip_groups = rule.get('sourceIpGroups', [])
         source_service_tags = rule.get('sourceServiceTags', [])
@@ -114,10 +114,10 @@ def matches_application_rule(rule, source_ip, destination_ip):
         
         source_matches = any(source_ip in addr for addr in all_sources)
     
-    # Check destination FQDN/ServiceTag only if provided
+    # Check destination FQDN only if provided
     dest_matches = True
-    if destination_ip:
-        # Check FQDN destinations, URLs, and Service Tags
+    if destination_ip and destination_ip.strip():
+        # Check all possible destination fields that actually exist
         fqdn_destinations = rule.get('targetFqdns', [])
         url_destinations = rule.get('targetUrls', [])
         service_tag_destinations = rule.get('destinationServiceTags', [])
@@ -143,8 +143,8 @@ def display_search_results(results):
         network_df = pd.DataFrame([
             {
                 'Name': rule.get('name', 'N/A'),
-                'Source': ', '.join(rule.get('sourceAddresses', [])),
-                'Destination': ', '.join(rule.get('destinationAddresses', [])),
+                'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+                'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
                 'Ports': ', '.join(rule.get('destinationPorts', [])),
                 'Protocol': ', '.join(rule.get('ipProtocols', []))
             }
@@ -157,8 +157,8 @@ def display_search_results(results):
         app_df = pd.DataFrame([
             {
                 'Name': rule.get('name', 'N/A'),
-                'Source': ', '.join(rule.get('sourceAddresses', [])),
-                'Target FQDNs': ', '.join(rule.get('targetFqdns', [])),
+                'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+                'Target FQDNs': ', '.join(rule.get('targetFqdns', []) + rule.get('targetUrls', [])),
                 'Protocols': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])])
             }
             for rule in results['application_rules']
@@ -170,8 +170,8 @@ def display_search_results(results):
         blocked_df = pd.DataFrame([
             {
                 'Name': rule.get('name', 'N/A'),
-                'Source': ', '.join(rule.get('sourceAddresses', [])),
-                'Destination': ', '.join(rule.get('destinationAddresses', [])),
+                'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
+                'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
                 'Reason': 'Blocked by deny rule'
             }
             for rule in results['blocked_rules']
