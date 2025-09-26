@@ -51,31 +51,40 @@ def create_permissive_chart(overly_permissive):
         st.info("No issues found to display in chart.")
         return
     
-    # Create pie chart
+    # Create pie chart with counts in names
+    names_with_counts = [f"{name} ({count})" for name, count in issue_counts.items()]
     fig = px.pie(
         values=list(issue_counts.values()),
-        names=list(issue_counts.keys()),
+        names=names_with_counts,
         title="Overly Permissive Rule Issues",
         color_discrete_sequence=px.colors.qualitative.Set3
     )
     
-    # Add count and percentage labels
+    # Add percentage labels only (no counts)
     total_issues = sum(issue_counts.values())
-    labels_with_counts = [f"{name}<br>({count}, {count/total_issues*100:.1f}%)" 
-                         for name, count in issue_counts.items()]
+    labels_with_percent = [f"{name}<br>({count/total_issues*100:.1f}%)" 
+                          for name, count in issue_counts.items()]
     
     fig.update_traces(
         textposition='inside',
-        text=labels_with_counts,
+        text=labels_with_percent,
         textinfo='text',
         hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
     )
     
+    # Update legend to include counts
     fig.update_layout(
         showlegend=True,
+        legend=dict(
+            title=f"Total Issues: {total_issues}",
+            title_font_size=14,
+            font_size=12
+        ),
         height=400,
         margin=dict(t=50, b=50, l=50, r=50)
     )
+    
+    # Legend labels already include counts from the names_with_counts
     
     # Store the chart data
     st.session_state.permissive_chart_data = {
@@ -156,31 +165,40 @@ def create_redundancy_chart(redundant_rules):
         st.info("No redundancy found to display in chart.")
         return
     
-    # Create pie chart
+    # Create pie chart with counts in names
+    names_with_counts = [f"{name} ({count})" for name, count in redundancy_counts.items()]
     fig = px.pie(
         values=list(redundancy_counts.values()),
-        names=list(redundancy_counts.keys()),
+        names=names_with_counts,
         title="Redundant Rule Types",
         color_discrete_sequence=px.colors.qualitative.Pastel
     )
     
-    # Add count and percentage labels
+    # Add percentage labels only (no counts)
     total_redundant = sum(redundancy_counts.values())
-    labels_with_counts = [f"{name}<br>({count}, {count/total_redundant*100:.1f}%)" 
-                         for name, count in redundancy_counts.items()]
+    labels_with_percent = [f"{name}<br>({count/total_redundant*100:.1f}%)" 
+                          for name, count in redundancy_counts.items()]
     
     fig.update_traces(
         textposition='inside',
-        text=labels_with_counts,
+        text=labels_with_percent,
         textinfo='text',
         hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
     )
     
+    # Update legend to include counts
     fig.update_layout(
         showlegend=True,
+        legend=dict(
+            title=f"Total Redundant Pairs: {total_redundant}",
+            title_font_size=14,
+            font_size=12
+        ),
         height=400,
         margin=dict(t=50, b=50, l=50, r=50)
     )
+    
+    # Legend labels already include counts from the names_with_counts
     
     # Store the chart data
     st.session_state.redundancy_chart_data = {
