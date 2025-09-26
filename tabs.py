@@ -785,7 +785,7 @@ def get_service_name(port):
 
 def render_all_tabs(rules):
     """Render all tabs using Streamlit's tab functionality"""
-    tab1, tab2, tab3, tab4 = st.tabs(["🔍 Search", "🔄 Compare", "🌐 VNet Calculator", "🛠️ Network Tools"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Search", "🔄 Compare", "🌐 VNet Calculator", "🛠️ Network Tools", "⚡ Firewall Optimization"])
     
     with tab1:
         render_search_tab(rules)
@@ -798,3 +798,8 @@ def render_all_tabs(rules):
     
     with tab4:
         render_tools_tab()
+    
+    with tab5:
+        from firewall_optimization import render_optimization_tab
+        render_optimization_tab(rules)
+
