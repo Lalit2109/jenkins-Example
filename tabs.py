@@ -19,7 +19,7 @@ def render_search_tab(rules):
     
     # Search form
     with st.form("search_form"):
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             source_ip = st.text_input(
@@ -35,18 +35,25 @@ def render_search_tab(rules):
                 help="Enter the destination IP address or FQDN to check (optional)"
             )
         
+        with col3:
+            rule_name = st.text_input(
+                "Rule Name (Optional)",
+                placeholder="e.g., AllowInternalWeb",
+                help="Enter the rule name to search for (optional)"
+            )
+        
         search_button = st.form_submit_button("🔍 Search Rules", use_container_width=True)
     
     if search_button:
-        if not source_ip.strip() and not destination_ip.strip():
-            st.warning("⚠️ Please enter at least a source IP address or destination IP address")
+        if not source_ip.strip() and not destination_ip.strip() and not rule_name.strip():
+            st.warning("⚠️ Please enter at least a source IP address, destination IP address, or rule name")
             return
         
         # Perform search
-        results = search_rules(rules, source_ip, destination_ip)
+        results = search_rules(rules, source_ip, destination_ip, rule_name)
         display_search_results(results)
 
-def search_rules(rules, source_ip, destination_ip):
+def search_rules(rules, source_ip, destination_ip, rule_name):
     """Search for matching rules based on criteria"""
     results = {
         'network_rules': [],
@@ -58,7 +65,7 @@ def search_rules(rules, source_ip, destination_ip):
     # Search network rules
     if rules.get('network'):
         for rule in rules['network']:
-            if matches_network_rule(rule, source_ip, destination_ip):
+            if matches_network_rule(rule, source_ip, destination_ip, rule_name):
                 if rule.get('ruleType') == 'NetworkRule':
                     results['network_rules'].append(rule)
                 elif rule.get('ruleType') == 'DenyRule':
@@ -69,12 +76,12 @@ def search_rules(rules, source_ip, destination_ip):
     # Search application rules
     if rules.get('application'):
         for rule in rules['application']:
-            if matches_application_rule(rule, source_ip, destination_ip):
+            if matches_application_rule(rule, source_ip, destination_ip, rule_name):
                 results['application_rules'].append(rule)
     
     return results
 
-def matches_network_rule(rule, source_ip, destination_ip):
+def matches_network_rule(rule, source_ip, destination_ip, rule_name):
     """Check if a network rule matches the search criteria"""
     # Check source IP only if provided
     source_matches = True
@@ -99,9 +106,15 @@ def matches_network_rule(rule, source_ip, destination_ip):
         
         dest_matches = any(destination_ip in dest for dest in all_destinations)
     
-    return source_matches and dest_matches
+    # Check rule name only if provided
+    name_matches = True
+    if rule_name and rule_name.strip():
+        rule_name_value = rule.get('name', '')
+        name_matches = rule_name.strip().lower() in rule_name_value.lower()
+    
+    return source_matches and dest_matches and name_matches
 
-def matches_application_rule(rule, source_ip, destination_ip):
+def matches_application_rule(rule, source_ip, destination_ip, rule_name):
     """Check if an application rule matches the search criteria"""
     # Check source IP only if provided
     source_matches = True
@@ -125,7 +138,13 @@ def matches_application_rule(rule, source_ip, destination_ip):
         
         dest_matches = any(destination_ip in dest for dest in all_destinations)
     
-    return source_matches and dest_matches
+    # Check rule name only if provided
+    name_matches = True
+    if rule_name and rule_name.strip():
+        rule_name_value = rule.get('name', '')
+        name_matches = rule_name.strip().lower() in rule_name_value.lower()
+    
+    return source_matches and dest_matches and name_matches
 
 def display_search_results(results):
     """Display search results in a formatted way"""
@@ -143,6 +162,7 @@ def display_search_results(results):
         network_df = pd.DataFrame([
             {
                 'Name': rule.get('name', 'N/A'),
+                'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
                 'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
                 'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
                 'Ports': ', '.join(rule.get('destinationPorts', [])),
@@ -159,6 +179,7 @@ def display_search_results(results):
         app_df = pd.DataFrame([
             {
                 'Name': rule.get('name', 'N/A'),
+                'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
                 'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
                 'Target FQDNs': ', '.join(rule.get('targetFqdns', []) + rule.get('targetUrls', [])),
                 'Protocols': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])])
@@ -174,6 +195,7 @@ def display_search_results(results):
         blocked_df = pd.DataFrame([
             {
                 'Name': rule.get('name', 'N/A'),
+                'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
                 'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
                 'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
                 'Reason': 'Blocked by deny rule'
