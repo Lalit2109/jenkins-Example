@@ -5,7 +5,6 @@ import fnmatch
 import logging
 
 # Ensure logging is configured
-logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def parse_firewall_policy(policy_json: Any) -> Dict[str, List[dict]]:
@@ -20,24 +19,36 @@ def parse_firewall_policy(policy_json: Any) -> Dict[str, List[dict]]:
     # --- ARM/Portal/SDK format: dict with 'properties' and 'ruleCollectionGroups' ---
     if isinstance(policy_json, dict) and 'properties' in policy_json:
         groups = policy_json.get('properties', {}).get('ruleCollectionGroups', [])
-        logger.debug(f"DEBUG: Found {len(groups)} rule collection groups in ARM format")
         for i, group in enumerate(groups):
-            logger.debug(f"DEBUG: Processing group {i}: {group.keys() if isinstance(group, dict) else type(group)}")
             if isinstance(group, dict):
-                logger.debug(f"DEBUG: Group {i} properties: {group.get('properties', {}).keys()}")
                 collections = group.get('properties', {}).get('ruleCollections', [])
-                logger.debug(f"DEBUG: Group {i} has {len(collections)} rule collections")
             else:
-                logger.debug(f"DEBUG: Group {i} is not a dict: {type(group)}")
                 continue
             
+            
             for collection in collections:
+                # Accept both ARM and CLI casing/types
                 rc_type = collection.get('ruleCollectionType', '').lower()
                 rules = collection.get('rules', [])
-                if rc_type == 'networkrulecollection':
-                    network_rules.extend(rules)
+
+                # Handle different rule types
+                collection_name = collection.get('name', 'Unknown')
+                if rc_type in ['networkrulecollection', 'firewallpolicyfilterrulecollection']:
+                    for rule in rules:
+                        rule_type = rule.get('ruleType', '').lower()
+                        # Add rule collection name to the rule
+                        rule['ruleCollectionName'] = collection_name
+                        if rule_type == 'networkrule':
+                            network_rules.append(rule)
+                        elif rule_type == 'applicationrule':
+                            application_rules.append(rule)
                 elif rc_type == 'applicationrulecollection':
-                    application_rules.extend(rules)
+                    for rule in rules:
+                        rule_type = rule.get('ruleType', '').lower()
+                        # Add rule collection name to the rule
+                        rule['ruleCollectionName'] = collection_name
+                        if rule_type == 'applicationrule':
+                            application_rules.append(rule)
     # --- CLI/Flat format: list of rule collection groups ---
     elif isinstance(policy_json, list):
         for group in policy_json:
@@ -50,27 +61,27 @@ def parse_firewall_policy(policy_json: Any) -> Dict[str, List[dict]]:
                 # Accept both ARM and CLI casing/types
                 rc_type = collection.get('ruleCollectionType', '').lower()
                 rules = collection.get('rules', [])
+                collection_name = collection.get('name', 'Unknown')
                 
                 # Debug logging
-                logger.debug(f"DEBUG: Processing rule collection type: '{rc_type}' with {len(rules)} rules")
                 
                 # Handle different rule types (case insensitive)
                 if rc_type.lower() in ['networkrulecollection', 'firewallpolicyfilterrulecollection']:
-                    logger.debug(f"DEBUG: Processing {len(rules)} rules in {rc_type}")
                     for rule in rules:
                         rule_type = rule.get('ruleType', '').lower()
-                        logger.debug(f"DEBUG: Rule type: '{rule_type}', name: '{rule.get('name', 'unnamed')}'")
+                        # Add rule collection name to the rule
+                        rule['ruleCollectionName'] = collection_name
                         if rule_type == 'networkrule':
                             network_rules.append(rule)
-                            logger.debug(f"DEBUG: Added network rule: {rule.get('name', 'unnamed')}")
                         elif rule_type == 'applicationrule':
                             application_rules.append(rule)
-                            logger.debug(f"DEBUG: Added application rule: {rule.get('name', 'unnamed')}")
                         else:
-                            logger.debug(f"DEBUG: Unknown rule type: '{rule_type}'")
+                            pass  # Unknown rule type, skip
                 elif rc_type == 'applicationrulecollection':
                     for rule in rules:
                         rule_type = rule.get('ruleType', '').lower()
+                        # Add rule collection name to the rule
+                        rule['ruleCollectionName'] = collection_name
                         if rule_type == 'applicationrule':
                             application_rules.append(rule)
     else:
@@ -92,7 +103,6 @@ def search_rules(rules: dict, source: str = '', destination: str = '') -> list:
         for src in all_sources:
             src_match = True if not source else False
             try:
-                # print(f"Comparing {source} with {src} => {ipaddress.ip_network(source, strict=False).overlaps(ipaddress.ip_network(src, strict=False))}")
                 # Try IP/CIDR overlap for source
                 if not source or ipaddress.ip_network(source, strict=False).overlaps(ipaddress.ip_network(src, strict=False)):
                     src_match = True
