@@ -195,6 +195,7 @@ def render_rule_tables(rules):
                 all_rules_data.append({
                     'Type': 'Network',
                     'Name': rule.get('name', 'N/A'),
+                    'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
                     'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
                     'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
                     'Ports': ', '.join(rule.get('destinationPorts', [])),
@@ -208,6 +209,7 @@ def render_rule_tables(rules):
                 all_rules_data.append({
                     'Type': 'Application',
                     'Name': rule.get('name', 'N/A'),
+                    'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
                     'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
                     'Destination': ', '.join(rule.get('targetFqdns', []) + rule.get('targetUrls', [])),
                     'Ports': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])]),
@@ -231,6 +233,7 @@ def create_network_rules_dataframe(network_rules):
     for rule in network_rules:
         data.append({
             'Name': rule.get('name', 'N/A'),
+            'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
             'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
             'Destination': ', '.join(rule.get('destinationAddresses', []) + rule.get('destinationFqdns', []) + rule.get('destinationIpGroups', []) + rule.get('destinationServiceTags', [])),
             'Ports': ', '.join(rule.get('destinationPorts', [])),
@@ -251,6 +254,7 @@ def create_application_rules_dataframe(app_rules):
     for rule in app_rules:
         data.append({
             'Name': rule.get('name', 'N/A'),
+            'Rule Collection': rule.get('ruleCollectionName', 'N/A'),
             'Source': ', '.join(rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])),
             'Target FQDNs': ', '.join(rule.get('targetFqdns', []) + rule.get('targetUrls', [])),
             'Protocols': ', '.join([f"{p.get('protocolType', 'N/A')}:{p.get('port', 'N/A')}" for p in rule.get('protocols', [])]),
