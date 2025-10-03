@@ -431,6 +431,30 @@ def render_vnet_tab():
             }
         )
     
+    # VNet Data Refresh Section
+    st.markdown("---")
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        if st.session_state.get('vnet_data_loaded', False):
+            file_time = st.session_state.get('vnet_file_creation_time')
+            if file_time:
+                st.info(f"Using sample data from sample_vnets.json (created: {file_time.strftime('%Y-%m-%d %H:%M:%S')})")
+            else:
+                st.info("Using sample data from sample_vnets.json")
+        else:
+            st.warning("No VNet data loaded")
+    
+    with col2:
+        if st.button("🔄 Refresh VNet Data", type="secondary", use_container_width=True):
+            with st.spinner("Refreshing VNet data from Azure..."):
+                success, message, data = refresh_vnet_data()
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+    
     st.markdown("---")
     # Render only the specific size search functionality
     render_specific_size_tab(vnet_calculator, env_config, SUBNET_SIZES)
