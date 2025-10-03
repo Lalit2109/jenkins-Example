@@ -254,7 +254,13 @@ class AzureService:
                                         'ipProtocols': rule.ip_protocols if hasattr(rule, 'ip_protocols') else [],
                                         'fqdnTags': rule.fqdn_tags if hasattr(rule, 'fqdn_tags') else [],
                                         'targetFqdns': rule.target_fqdns if hasattr(rule, 'target_fqdns') else [],
-                                        'targetUrls': rule.target_urls if hasattr(rule, 'target_urls') else []
+                                        'targetUrls': rule.target_urls if hasattr(rule, 'target_urls') else [],
+                                        'protocols': [
+                                            {
+                                                'protocolType': p.protocol_type if hasattr(p, 'protocol_type') else None,
+                                                'port': p.port if hasattr(p, 'port') else None
+                                            } for p in (rule.protocols if hasattr(rule, 'protocols') and rule.protocols else [])
+                                        ]
                                     }
                                     rule_collection_dict['rules'].append(rule_dict)
                             
@@ -399,7 +405,9 @@ class AzureService:
                     'id': vnet.id,
                     'name': vnet.name,
                     'location': vnet.location,
-                    'address_space': [str(addr) for addr in vnet.address_space.address_prefixes],
+                    'addressSpace': {
+                        'addressPrefixes': [str(addr) for addr in vnet.address_space.address_prefixes]
+                    },
                     'subnets': []
                 }
                 
@@ -409,8 +417,8 @@ class AzureService:
                         subnet_dict = {
                             'id': subnet.id,
                             'name': subnet.name,
-                            'address_prefix': subnet.address_prefix,
-                            'address_prefixes': [str(addr) for addr in subnet.address_prefixes] if subnet.address_prefixes else [subnet.address_prefix]
+                            'addressPrefix': subnet.address_prefix,
+                            'addressPrefixes': [str(addr) for addr in subnet.address_prefixes] if subnet.address_prefixes else [subnet.address_prefix]
                         }
                         vnet_dict['subnets'].append(subnet_dict)
                 
@@ -424,6 +432,130 @@ class AzureService:
             return []
         except Exception as e:
             logger.error(f"Unexpected error: {str(e)}")
+            return []
+
+    def get_all_virtual_networks(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get all virtual networks across all subscriptions the managed identity has access to
+        
+        Returns:
+            Dictionary with subscription_id as key and list of VNets as value
+        """
+        if not self.authenticated:
+            logger.error("Not authenticated with Azure")
+            return {}
+            
+        try:
+            all_vnets = {}
+            
+            # Get all subscriptions the managed identity has access to
+            subscriptions = self._get_accessible_subscriptions()
+            if not subscriptions:
+                logger.warning("No accessible subscriptions found")
+                return {}
+            
+            logger.info(f"Found {len(subscriptions)} accessible subscriptions")
+            
+            for subscription in subscriptions:
+                sub_id = subscription['subscription_id']
+                sub_name = subscription.get('display_name', sub_id)
+                logger.info(f"Processing subscription: {sub_name} ({sub_id})")
+                
+                try:
+                    # Create a new network client for this subscription
+                    sub_network_client = NetworkManagementClient(self.credential, sub_id)
+                    sub_resource_client = ResourceManagementClient(self.credential, sub_id)
+                    
+                    # Get all resource groups in this subscription
+                    resource_groups = []
+                    for rg in sub_resource_client.resource_groups.list():
+                        resource_groups.append(rg.name)
+                    
+                    logger.info(f"Found {len(resource_groups)} resource groups in {sub_name}")
+                    
+                    # Get VNets from all resource groups
+                    subscription_vnets = []
+                    for rg_name in resource_groups:
+                        try:
+                            rg_vnets = []
+                            for vnet in sub_network_client.virtual_networks.list(rg_name):
+                                vnet_dict = {
+                                    'id': vnet.id,
+                                    'name': vnet.name,
+                                    'location': vnet.location,
+                                    'resource_group': rg_name,
+                                    'subscription_id': sub_id,
+                                    'subscription_name': sub_name,
+                                    'addressSpace': {
+                                        'addressPrefixes': [str(addr) for addr in vnet.address_space.address_prefixes]
+                                    },
+                                    'subnets': []
+                                }
+                                
+                                # Get subnets (we need these for IP range calculation)
+                                if vnet.subnets:
+                                    for subnet in vnet.subnets:
+                                        subnet_dict = {
+                                            'id': subnet.id,
+                                            'name': subnet.name,
+                                            'addressPrefix': subnet.address_prefix,
+                                            'addressPrefixes': [str(addr) for addr in subnet.address_prefixes] if subnet.address_prefixes else [subnet.address_prefix]
+                                        }
+                                        vnet_dict['subnets'].append(subnet_dict)
+                                
+                                rg_vnets.append(vnet_dict)
+                            
+                            subscription_vnets.extend(rg_vnets)
+                            if rg_vnets:
+                                logger.info(f"Found {len(rg_vnets)} VNets in {rg_name}")
+                                
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch VNets from {rg_name} in {sub_name}: {e}")
+                            continue
+                    
+                    if subscription_vnets:
+                        all_vnets[sub_id] = subscription_vnets
+                        logger.info(f"Total VNets in {sub_name}: {len(subscription_vnets)}")
+                    else:
+                        logger.info(f"No VNets found in {sub_name}")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process subscription {sub_name}: {e}")
+                    continue
+            
+            total_vnets = sum(len(vnets) for vnets in all_vnets.values())
+            logger.info(f"Retrieved {total_vnets} VNets across {len(all_vnets)} subscriptions")
+            return all_vnets
+            
+        except Exception as e:
+            logger.error(f"Error getting all virtual networks: {str(e)}")
+            return {}
+
+    def _get_accessible_subscriptions(self) -> List[Dict[str, str]]:
+        """
+        Get all subscriptions the managed identity has access to
+        
+        Returns:
+            List of subscription dictionaries
+        """
+        try:
+            from azure.mgmt.resource import SubscriptionClient
+            
+            subscription_client = SubscriptionClient(self.credential)
+            subscriptions = []
+            
+            for subscription in subscription_client.subscriptions.list():
+                subscriptions.append({
+                    'subscription_id': subscription.subscription_id,
+                    'display_name': subscription.display_name,
+                    'state': subscription.state
+                })
+            
+            logger.info(f"Found {len(subscriptions)} accessible subscriptions")
+            return subscriptions
+            
+        except Exception as e:
+            logger.error(f"Error getting accessible subscriptions: {str(e)}")
             return []
 
     def get_resource_groups(self) -> List[Dict[str, Any]]:
@@ -493,35 +625,6 @@ class AzureService:
         except Exception as e:
             logger.error(f"Error saving policy: {e}")
     
-    def save_vnets_to_file(self, vnet_data: List[Dict[str, Any]], filename: str = "existing_vnets.json"):
-        """
-        Save VNet data to JSON file
-        
-        Args:
-            vnet_data: VNet data to save
-            filename: Target filename
-        """
-        try:
-            with open(filename, 'w') as f:
-                json.dump(vnet_data, f, indent=2)
-            logger.info(f"VNet data saved to {filename}")
-        except Exception as e:
-            logger.error(f"Error saving VNet data: {e}")
-    
-    def get_existing_vnets(self, resource_group_name: str = None) -> List[Dict[str, Any]]:
-        """
-        Get existing virtual networks (alias for get_virtual_networks)
-        
-        Args:
-            resource_group_name: Name of the resource group
-            
-        Returns:
-            List of virtual network dictionaries
-        """
-        if not resource_group_name:
-            resource_group_name = self.config.get('resource_group', '')
-        
-        return self.get_virtual_networks(resource_group_name)
     
     def get_policy_name(self) -> str:
         """
@@ -543,14 +646,6 @@ def load_policy_from_file(file_path: str) -> Dict[str, Any]:
         logger.error(f"Failed to load policy from file {file_path}: {str(e)}")
         return {}
 
-def load_vnets_from_file(file_path: str) -> Dict[str, Any]:
-    """Load virtual networks from JSON file"""
-    try:
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load VNets from file {file_path}: {str(e)}")
-        return {}
 
 def get_file_creation_time(file_path: str) -> Optional[datetime]:
     """Get file creation time"""
