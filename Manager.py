@@ -47,6 +47,41 @@ def save_policy_to_file(policy_data, file_path="firewall_policy.json"):
         logger.error(f"Error saving policy to file: {e}")
         return False
 
+def save_vnet_data_to_file(vnet_data, file_path="vnet_data.json"):
+    """Save VNet data to file with metadata"""
+    try:
+        # Create data structure with metadata
+        data_with_metadata = {
+            "data": vnet_data,
+            "metadata": {
+                "created_at": datetime.now().isoformat(),
+                "source": "azure",
+                "version": "1.0"
+            }
+        }
+        
+        with open(file_path, 'w') as f:
+            json.dump(data_with_metadata, f, indent=2)
+        
+        logger.info(f"VNet data saved to {file_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving VNet data to file: {e}")
+        return False
+
+def load_vnet_data_from_file(file_path="vnet_data.json"):
+    """Load VNet data from file"""
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            logger.info(f"VNet data loaded from {file_path}")
+            return data
+        return None
+    except Exception as e:
+        logger.error(f"Error loading VNet data from file: {e}")
+        return None
+
 def load_policy_from_file(file_path="firewall_policy.json"):
     """Load policy data from file"""
     try:
@@ -98,9 +133,6 @@ def refresh_azure_data():
         if not policy_data:
             return False, "Failed to fetch firewall policy data", None
         
-        # Get VNet data
-        vnet_data = azure_service.get_virtual_networks(config.get('resource_group', ''))
-        
         # Save data to file
         save_success = save_policy_to_file(policy_data)
         if not save_success:
@@ -108,7 +140,6 @@ def refresh_azure_data():
         
         # Store data in session state
         st.session_state.policy_data = policy_data
-        st.session_state.vnet_data = vnet_data
         st.session_state.azure_policy_name = config.get('firewall_policy_name', 'Unknown Policy')
         st.session_state.loaded_file_name = "firewall_policy.json"
         st.session_state.file_creation_time = get_file_creation_time("firewall_policy.json")
@@ -121,6 +152,49 @@ def refresh_azure_data():
     except Exception as e:
         logger.error(f"Error refreshing Azure data: {e}")
         return False, f"Error refreshing data: {str(e)}", None
+
+def refresh_vnet_data():
+    """Refresh VNet data from Azure across all accessible subscriptions and return success status, message, and data"""
+    try:
+        # Get configuration using the existing function
+        config = get_azure_config()
+        
+        logger.info(f"Refreshing VNet data with config: subscription_id={config['subscription_id']}")
+        
+        azure_service = AzureService(config)
+        
+        # Test connection first
+        if not azure_service.test_connection():
+            return False, "Azure connection failed", None
+        
+        # Get all VNets across all accessible subscriptions
+        logger.info("🔍 Fetching VNets from all accessible subscriptions...")
+        all_vnets = azure_service.get_all_virtual_networks()
+        
+        if not all_vnets:
+            return False, "No VNets found in any accessible subscription", None
+        
+        # Calculate total VNets
+        total_vnets = sum(len(vnets) for vnets in all_vnets.values())
+        total_subscriptions = len(all_vnets)
+        
+        logger.info(f"✅ Found {total_vnets} VNets across {total_subscriptions} subscriptions")
+        
+        # Save VNet data to file
+        save_success = save_vnet_data_to_file(all_vnets)
+        if not save_success:
+            logger.warning("Failed to save VNet data to file, but continuing...")
+        
+        # Store data in session state
+        st.session_state.vnet_data = all_vnets
+        st.session_state.vnet_data_loaded = True
+        st.session_state.vnet_file_creation_time = get_file_creation_time("vnet_data.json")
+        
+        return True, f"VNet data refreshed successfully from Azure ({total_vnets} VNets from {total_subscriptions} subscriptions)", all_vnets
+        
+    except Exception as e:
+        logger.error(f"Error refreshing VNet data: {e}")
+        return False, f"Error refreshing VNet data: {str(e)}", None
 
 def load_policy_data(policy_source, azure_service, environment="local"):
     """Load policy data based on the selected source"""
@@ -238,6 +312,61 @@ def load_policy_data(policy_source, azure_service, environment="local"):
                     logger.info("✅ Fallback to sample policy data loaded successfully")
     
     return policy_json, rules
+
+def load_vnet_data(environment="local"):
+    """Load VNet data based on environment"""
+    logger.info(f"🔄 Loading VNet data - environment: {environment}")
+    
+    # Try to load from cached file first
+    vnet_data = load_vnet_data_from_file("vnet_data.json")
+    if vnet_data:
+        # Extract actual VNet data from metadata structure
+        if isinstance(vnet_data, dict) and 'data' in vnet_data:
+            actual_vnet_data = vnet_data['data']
+            logger.info(f"Extracted VNet data from 'data' key, type: {type(actual_vnet_data)}")
+        else:
+            actual_vnet_data = vnet_data
+            logger.info(f"Using VNet data directly, type: {type(actual_vnet_data)}")
+        
+        # Ensure data is in dict format (resource_group -> vnets)
+        if isinstance(actual_vnet_data, list):
+            # Convert list to dict format
+            actual_vnet_data = {"sample": actual_vnet_data}
+            logger.info("Converted list VNet data to dict format")
+        
+        # Store in session state
+        st.session_state.vnet_data = actual_vnet_data
+        st.session_state.vnet_data_loaded = True
+        st.session_state.vnet_file_creation_time = get_file_creation_time("vnet_data.json")
+        logger.info("✅ Cached VNet data loaded successfully")
+        return actual_vnet_data
+    
+    # Fallback to sample data
+    logger.info("⚠️ No cached VNet data found - using sample data")
+    sample_data = load_vnet_data_from_file('sample_data/sample_vnets.json')
+    if sample_data:
+        if isinstance(sample_data, dict) and 'data' in sample_data:
+            actual_vnet_data = sample_data['data']
+        else:
+            actual_vnet_data = sample_data
+        
+        # Ensure data is in dict format
+        if isinstance(actual_vnet_data, list):
+            actual_vnet_data = {"sample": actual_vnet_data}
+            logger.info("Converted sample list VNet data to dict format")
+        
+        # Store in session state
+        st.session_state.vnet_data = actual_vnet_data
+        st.session_state.vnet_data_loaded = True
+        st.session_state.vnet_file_creation_time = get_file_creation_time('sample_data/sample_vnets.json')
+        logger.info("✅ Sample VNet data loaded successfully")
+        return actual_vnet_data
+    
+    # No data available
+    logger.warning("❌ No VNet data available")
+    st.session_state.vnet_data = {}
+    st.session_state.vnet_data_loaded = False
+    return {}
 
 def handle_background_refresh():
     """Handle background refresh when show_refresh_modal is True"""
