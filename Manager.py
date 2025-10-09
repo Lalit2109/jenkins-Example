@@ -189,6 +189,7 @@ def refresh_vnet_data():
         st.session_state.vnet_data = all_vnets
         st.session_state.vnet_data_loaded = True
         st.session_state.vnet_file_creation_time = get_file_creation_time("vnet_data.json")
+        st.session_state.vnet_data_source = "azure"
         
         return True, f"VNet data refreshed successfully from Azure ({total_vnets} VNets from {total_subscriptions} subscriptions)", all_vnets
         
@@ -338,6 +339,7 @@ def load_vnet_data(environment="local"):
         st.session_state.vnet_data = actual_vnet_data
         st.session_state.vnet_data_loaded = True
         st.session_state.vnet_file_creation_time = get_file_creation_time("vnet_data.json")
+        st.session_state.vnet_data_source = "cached"
         logger.info("✅ Cached VNet data loaded successfully")
         return actual_vnet_data
     
@@ -359,6 +361,7 @@ def load_vnet_data(environment="local"):
         st.session_state.vnet_data = actual_vnet_data
         st.session_state.vnet_data_loaded = True
         st.session_state.vnet_file_creation_time = get_file_creation_time('sample_data/sample_vnets.json')
+        st.session_state.vnet_data_source = "sample"
         logger.info("✅ Sample VNet data loaded successfully")
         return actual_vnet_data
     
