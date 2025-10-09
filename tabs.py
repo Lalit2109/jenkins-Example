@@ -438,10 +438,22 @@ def render_vnet_tab():
     with col1:
         if st.session_state.get('vnet_data_loaded', False):
             file_time = st.session_state.get('vnet_file_creation_time')
-            if file_time:
-                st.info(f"Using sample data from sample_vnets.json (created: {file_time.strftime('%Y-%m-%d %H:%M:%S')})")
+            source = st.session_state.get('vnet_data_source', 'sample')
+            if source == 'azure':
+                if file_time:
+                    st.info(f"Using Azure data (cached file created: {file_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                else:
+                    st.info("Using Azure data")
+            elif source == 'cached':
+                if file_time:
+                    st.info(f"Using cached VNet data (created: {file_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                else:
+                    st.info("Using cached VNet data")
             else:
-                st.info("Using sample data from sample_vnets.json")
+                if file_time:
+                    st.info(f"Using sample data from sample_vnets.json (created: {file_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                else:
+                    st.info("Using sample data from sample_vnets.json")
         else:
             st.warning("No VNet data loaded")
     
@@ -506,26 +518,23 @@ def render_specific_size_tab(vnet_calculator, env_config, SUBNET_SIZES):
             st.success(f"✅ **Found {result['suggestions_count']} available {subnet_size} CIDR ranges!**")
             
             # Display results
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             with col1:
                 st.metric("Available Ranges", result['suggestions_count'])
             with col2:
-                st.metric("Total Possible", result['total_possible'])
-            with col3:
                 st.metric("Used Ranges Checked", result['used_ranges_considered'])
             
             # Show suggestions
             suggestions_df = pd.DataFrame(result['available_subnets'])
             st.dataframe(
-                suggestions_df[['cidr', 'usable_ips', 'first_usable_ip', 'last_usable_ip', 'gateway_suggestion']],
+                suggestions_df[['cidr', 'total_ips', 'first_usable_ip', 'last_usable_ip']],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
                     "cidr": st.column_config.TextColumn("CIDR", width="medium"),
-                    "usable_ips": st.column_config.NumberColumn("Usable IPs", width="small"),
+                    "total_ips": st.column_config.NumberColumn("Total IPs", width="small"),
                     "first_usable_ip": st.column_config.TextColumn("First IP", width="medium"),
                     "last_usable_ip": st.column_config.TextColumn("Last IP", width="medium"),
-                    "gateway_suggestion": st.column_config.TextColumn("Gateway", width="medium")
                 }
             )
             
