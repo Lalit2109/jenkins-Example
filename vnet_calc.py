@@ -300,8 +300,7 @@ class VNetCalculator:
                     "first_usable_ip": str(current_subnet.network_address + 1),
                     "last_usable_ip": str(current_subnet.broadcast_address - 1),
                     "total_ips": current_subnet.num_addresses,
-                    "usable_ips": current_subnet.num_addresses - 2,
-                    "gateway_suggestion": str(current_subnet.network_address + 1)
+                    "usable_ips": current_subnet.num_addresses - 2
                 }
                 available_subnets.append(subnet_info)
             
