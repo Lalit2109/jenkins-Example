@@ -97,16 +97,32 @@ def create_permissive_chart(overly_permissive):
     
     # Create a simple selectbox for interaction
     st.markdown("**Select an issue type to view details:**")
+    
+    # Get current selection from session state or default
+    current_selection = st.session_state.get('selected_permissive_issue', "Select an issue type...")
+    options = ["Select an issue type..."] + list(issue_counts.keys())
+    
+    # Find index of current selection
+    try:
+        default_index = options.index(current_selection) if current_selection in options else 0
+    except ValueError:
+        default_index = 0
+    
     selected_issue = st.selectbox(
         "Choose an issue type:",
-        options=["Select an issue type..."] + list(issue_counts.keys()),
+        options=options,
+        index=default_index,
         key="permissive_issue_selector",
         help="Select an issue type to view detailed information about affected rules"
     )
     
-    # Handle selection
+    # Update session state only if selection changed
     if selected_issue and selected_issue != "Select an issue type...":
-        st.session_state.selected_permissive_issue = selected_issue
+        if st.session_state.get('selected_permissive_issue') != selected_issue:
+            st.session_state.selected_permissive_issue = selected_issue
+    elif selected_issue == "Select an issue type..." and 'selected_permissive_issue' in st.session_state:
+        # Clear selection if user selects the default option
+        del st.session_state.selected_permissive_issue
     
     # Only show data panel if a selection has been made
     if 'selected_permissive_issue' in st.session_state:
@@ -211,16 +227,32 @@ def create_redundancy_chart(redundant_rules):
     
     # Create a simple selectbox for interaction
     st.markdown("**Select a redundancy type to view details:**")
+    
+    # Get current selection from session state or default
+    current_selection = st.session_state.get('selected_redundancy_type', "Select a redundancy type...")
+    options = ["Select a redundancy type..."] + list(redundancy_counts.keys())
+    
+    # Find index of current selection
+    try:
+        default_index = options.index(current_selection) if current_selection in options else 0
+    except ValueError:
+        default_index = 0
+    
     selected_type = st.selectbox(
         "Choose a redundancy type:",
-        options=["Select a redundancy type..."] + list(redundancy_counts.keys()),
+        options=options,
+        index=default_index,
         key="redundancy_type_selector",
         help="Select a redundancy type to view detailed information about affected rule pairs"
     )
     
-    # Handle selection
+    # Update session state only if selection changed
     if selected_type and selected_type != "Select a redundancy type...":
-        st.session_state.selected_redundancy_type = selected_type
+        if st.session_state.get('selected_redundancy_type') != selected_type:
+            st.session_state.selected_redundancy_type = selected_type
+    elif selected_type == "Select a redundancy type..." and 'selected_redundancy_type' in st.session_state:
+        # Clear selection if user selects the default option
+        del st.session_state.selected_redundancy_type
     
     # Only show data panel if a selection has been made
     if 'selected_redundancy_type' in st.session_state:
