@@ -15,6 +15,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Import our custom modules
 from ui_components import render_sidebar, render_policy_summary, render_rule_tables, render_download_section
 from data_manager import initialize_azure_service, load_policy_data, handle_background_refresh
+from azure_policies import list_firewall_policies
+from policy_loader import load_policy_rules
 from tabs import render_all_tabs
 from app_config import is_feature_enabled
 
@@ -47,7 +49,8 @@ def main():
             padding-bottom: 0px !important;
         }
         .stApp > header {
-            visibility: hidden;
+            display: none !important;
+            height: 0 !important;
         }
         .stApp > div:first-child {
             padding-top: 0px !important;
@@ -93,6 +96,46 @@ def main():
     # Handle background refresh
     handle_background_refresh()
     
+    # Policy selector (multi-policy support) - gated by feature flag
+    if is_feature_enabled("enable_multi_policy"):
+        if "policy_catalog" not in st.session_state:
+            st.session_state.policy_catalog = []
+        if "selected_policy_id" not in st.session_state:
+            st.session_state.selected_policy_id = None
+        if "current_policy" not in st.session_state:
+            st.session_state.current_policy = None
+        if "current_rules" not in st.session_state:
+            st.session_state.current_rules = None
+
+        with st.container():
+            st.markdown("### Policy", unsafe_allow_html=True)
+            if not st.session_state.policy_catalog:
+                with st.spinner("Discovering Firewall Policies across subscriptions…"):
+                    try:
+                        st.session_state.policy_catalog = list_firewall_policies()
+                    except Exception as e:
+                        st.warning(f"Policy discovery failed: {e}")
+                        st.session_state.policy_catalog = []
+
+            catalog = st.session_state.policy_catalog
+            if catalog:
+                labels = [f"{p['name']} — {p['subscription_id']}/{p['resource_group']} ({p['location']})" for p in catalog]
+                index = 0
+                if st.session_state.selected_policy_id:
+                    for i, p in enumerate(catalog):
+                        if p["id"] == st.session_state.selected_policy_id:
+                            index = i
+                            break
+                sel = st.selectbox("Select a Firewall Policy", labels, index=index, key="policy_selectbox")
+                chosen = catalog[labels.index(sel)]
+                if chosen["id"] != st.session_state.selected_policy_id:
+                    st.session_state.selected_policy_id = chosen["id"]
+                    st.session_state.current_policy = None
+                    st.session_state.current_rules = None
+                    st.rerun()
+            else:
+                st.info("No policies discovered or Azure is not configured. The app will use the previous single-policy loader.")
+
     # Render sidebar
     render_sidebar(azure_service, environment)
     
@@ -105,8 +148,29 @@ def main():
             """, unsafe_allow_html=True)
     
     # Load policy data
-    current_policy_source = st.session_state.get('policy_source', 'Auto-load JSON file')
-    policy_json, rules = load_policy_data(current_policy_source, azure_service, environment)
+    rules = None
+    policy_json = None
+    if st.session_state.get("selected_policy_id"):
+        if st.session_state.current_rules is None:
+            with st.spinner("Loading selected policy…"):
+                policy_json, rules = load_policy_rules(st.session_state.selected_policy_id)
+                # cache in session
+                st.session_state.current_policy = policy_json
+                st.session_state.current_rules = rules
+                # expose to legacy renderers that might read from session
+                st.session_state.rules = rules
+                st.session_state.policy_source = "Azure (selected policy)"
+                st.session_state.loaded_file_name = policy_json.get("policy", {}).get("name", "selected_policy")
+        else:
+            policy_json = st.session_state.current_policy
+            rules = st.session_state.current_rules
+            # keep session state synced for components using it
+            st.session_state.rules = rules
+            st.session_state.policy_source = "Azure (selected policy)"
+        current_policy_source = "Azure (selected policy)"
+    else:
+        current_policy_source = st.session_state.get('policy_source', 'Auto-load JSON file')
+        policy_json, rules = load_policy_data(current_policy_source, azure_service, environment)
     
     # Show file information
     display_file_information()
@@ -124,6 +188,7 @@ def main():
     
     # Render tabs
     render_all_tabs(rules)
+
 
 def display_file_information():
     """Display information about the loaded file"""
@@ -151,8 +216,8 @@ def display_file_information():
                 st.info(f"📄 Loaded from {file_name}")
     
     with col2:
-        # Show refresh button only for firewall_policy.json and when sidebar is hidden
-        if file_name == "firewall_policy.json" and not is_feature_enabled("show_sidebar"):
+        # Show refresh button when sidebar is hidden - always refreshes from Azure
+        if not is_feature_enabled("show_sidebar"):
             if st.button("🔄 Refresh", key="main_refresh_button", help="Refresh data from Azure"):
                 from data_manager import refresh_azure_data
                 with st.spinner("Refreshing data from Azure..."):
