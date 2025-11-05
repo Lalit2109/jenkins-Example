@@ -153,14 +153,32 @@ def main():
     if st.session_state.get("selected_policy_id"):
         if st.session_state.current_rules is None:
             with st.spinner("Loading selected policy…"):
-                policy_json, rules = load_policy_rules(st.session_state.selected_policy_id)
-                # cache in session
-                st.session_state.current_policy = policy_json
-                st.session_state.current_rules = rules
-                # expose to legacy renderers that might read from session
-                st.session_state.rules = rules
-                st.session_state.policy_source = "Azure (selected policy)"
-                st.session_state.loaded_file_name = policy_json.get("policy", {}).get("name", "selected_policy")
+                try:
+                    policy_json, rules = load_policy_rules(st.session_state.selected_policy_id)
+                    # cache in session
+                    st.session_state.current_policy = policy_json
+                    st.session_state.current_rules = rules
+                    # expose to legacy renderers that might read from session
+                    st.session_state.rules = rules
+                    st.session_state.policy_source = "Azure (selected policy)"
+                    st.session_state.loaded_file_name = policy_json.get("policy", {}).get("name", "selected_policy")
+                    
+                    # Debug: show what was loaded
+                    if rules:
+                        network_count = len(rules.get('network', []))
+                        app_count = len(rules.get('application', []))
+                        if network_count == 0 and app_count == 0:
+                            st.warning(f"⚠️ Policy loaded but no rules found. Policy has {len(policy_json.get('ruleCollectionGroups', []))} rule collection groups.")
+                            logger.warning(f"No rules parsed from policy. RCGs: {len(policy_json.get('ruleCollectionGroups', []))}")
+                        else:
+                            st.success(f"✅ Loaded {network_count} network rules and {app_count} application rules")
+                    else:
+                        st.error("❌ Failed to parse policy rules")
+                except Exception as e:
+                    logger.error(f"Error loading policy: {e}", exc_info=True)
+                    st.error(f"❌ Error loading policy: {str(e)}")
+                    rules = {"network": [], "application": []}
+                    policy_json = {"policy": {}, "ruleCollectionGroups": []}
         else:
             policy_json = st.session_state.current_policy
             rules = st.session_state.current_rules
