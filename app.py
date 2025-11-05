@@ -132,6 +132,8 @@ def main():
                     st.session_state.selected_policy_id = chosen["id"]
                     st.session_state.current_policy = None
                     st.session_state.current_rules = None
+                    # Clear all cached data when policy changes
+                    clear_all_cached_data()
                     st.rerun()
             else:
                 st.info("No policies discovered or Azure is not configured. The app will use the previous single-policy loader.")
@@ -245,6 +247,29 @@ def display_file_information():
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Failed to refresh data: {str(e)}")
+
+def clear_all_cached_data():
+    """Clear all cached data when policy changes"""
+    # Clear optimization cache
+    cache_keys_to_clear = [
+        'permissive_chart_data',
+        'redundancy_chart_data',
+        'selected_permissive_issue',
+        'selected_redundancy_type',
+        # Clear UI component toggles
+        'show_network_table',
+        'show_app_table',
+        'show_all_rules',
+        # Clear search form state (if any cached)
+        'search_form',
+        'compare_form',
+    ]
+    
+    for key in cache_keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    logger.info("Cleared all cached data for policy change")
 
 def initialize_session_state():
     """Initialize session state variables"""
