@@ -6,6 +6,8 @@ Handles all tab content including search, compare, VNet calculator, and tools
 import streamlit as st
 import logging
 import pandas as pd
+import ipaddress
+import fnmatch
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,11 @@ def render_search_tab(rules):
         display_search_results(results)
 
 def search_rules(rules, source_ip, destination_ip, rule_name):
-    """Search for matching rules based on criteria"""
+    """
+    Search for matching rules based on criteria.
+    Uses proper IP/CIDR overlap checking to find overarching IP ranges.
+    Returns a dict with categorized results.
+    """
     results = {
         'network_rules': [],
         'application_rules': [],
@@ -62,89 +68,134 @@ def search_rules(rules, source_ip, destination_ip, rule_name):
         'allowed_rules': []
     }
     
-    # Search network rules
+    # Helper function for IP/CIDR matching
+    def _ip_or_cidr_match(val1: str, val2: str) -> bool:
+        """Return True if val1 and val2 are overlapping IPs or CIDRs."""
+        try:
+            net1 = ipaddress.ip_network(val1, strict=False)
+            net2 = ipaddress.ip_network(val2, strict=False)
+            return net1.overlaps(net2)
+        except Exception:
+            return False
+    
+    # Helper function for FQDN matching
+    def _fqdn_match(val1: str, val2: str) -> bool:
+        """Return True if val1 matches val2 as FQDN or wildcard."""
+        return fnmatch.fnmatch(val1, val2)
+    
+    # Check rule name match
+    def _rule_name_matches(rule, rule_name):
+        """Check if rule name matches the search criteria"""
+        if not rule_name or not rule_name.strip():
+            return True
+        rule_name_value = rule.get('name', '')
+        return rule_name.strip().lower() in rule_name_value.lower()
+    
+    # --- Network rules ---
     if rules.get('network'):
         for rule in rules['network']:
-            if matches_network_rule(rule, source_ip, destination_ip, rule_name):
-                if rule.get('ruleType') == 'NetworkRule':
+            # Check rule name first
+            if not _rule_name_matches(rule, rule_name):
+                continue
+            
+            all_sources = rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])
+            source_matches = True if not source_ip or not source_ip.strip() else False
+            
+            # Check source IP if provided
+            if source_ip and source_ip.strip():
+                for src in all_sources:
+                    try:
+                        # Try IP/CIDR overlap for source
+                        if ipaddress.ip_network(source_ip.strip(), strict=False).overlaps(ipaddress.ip_network(src, strict=False)):
+                            source_matches = True
+                            break
+                    except Exception:
+                        # If not a valid IP/CIDR, fallback to string/partial match (for IP Groups or partial IPs)
+                        if source_ip.strip() in src:
+                            source_matches = True
+                            break
+            
+            if not source_matches:
+                continue
+            
+            # Check destination if provided
+            ip_destinations = rule.get('destinationAddresses', [])
+            fqdn_destinations = rule.get('destinationFqdns', [])
+            ip_group_destinations = rule.get('destinationIpGroups', [])
+            service_tag_destinations = rule.get('destinationServiceTags', [])
+            all_destinations = ip_destinations + fqdn_destinations + ip_group_destinations + service_tag_destinations
+            
+            dest_matches = True if not destination_ip or not destination_ip.strip() else False
+            
+            if destination_ip and destination_ip.strip():
+                for dst in all_destinations:
+                    # Try IP/CIDR match
+                    try:
+                        if _ip_or_cidr_match(destination_ip.strip(), dst):
+                            dest_matches = True
+                            break
+                    except Exception:
+                        pass
+                    # Try FQDN/wildcard/partial match
+                    if _fqdn_match(destination_ip.strip(), dst) or destination_ip.strip() in dst:
+                        dest_matches = True
+                        break
+            
+            if dest_matches:
+                rule_type = rule.get('ruleType', '').lower()
+                if rule_type == 'networkrule':
                     results['network_rules'].append(rule)
-                elif rule.get('ruleType') == 'DenyRule':
+                elif rule_type == 'denyrule':
                     results['blocked_rules'].append(rule)
                 else:
                     results['allowed_rules'].append(rule)
     
-    # Search application rules
+    # --- Application rules ---
     if rules.get('application'):
         for rule in rules['application']:
-            if matches_application_rule(rule, source_ip, destination_ip, rule_name):
+            # Check rule name first
+            if not _rule_name_matches(rule, rule_name):
+                continue
+            
+            all_sources = rule.get('sourceAddresses', []) + rule.get('sourceIpGroups', []) + rule.get('sourceServiceTags', [])
+            source_matches = True if not source_ip or not source_ip.strip() else False
+            
+            # Check source IP if provided
+            if source_ip and source_ip.strip():
+                for src in all_sources:
+                    try:
+                        # Try IP/CIDR overlap for source
+                        if ipaddress.ip_network(source_ip.strip(), strict=False).overlaps(ipaddress.ip_network(src, strict=False)):
+                            source_matches = True
+                            break
+                    except Exception:
+                        # If not a valid IP/CIDR, fallback to string/partial match (for IP Groups or partial IPs)
+                        if source_ip.strip() in src:
+                            source_matches = True
+                            break
+            
+            if not source_matches:
+                continue
+            
+            # Check destination if provided
+            fqdn_destinations = rule.get('targetFqdns', [])
+            url_destinations = rule.get('targetUrls', [])
+            service_tag_destinations = rule.get('destinationServiceTags', [])
+            all_destinations = fqdn_destinations + url_destinations + service_tag_destinations
+            
+            dest_matches = True if not destination_ip or not destination_ip.strip() else False
+            
+            if destination_ip and destination_ip.strip():
+                for dst in all_destinations:
+                    # For destinations, use FQDN/wildcard/partial match
+                    if _fqdn_match(destination_ip.strip(), dst) or destination_ip.strip() in dst:
+                        dest_matches = True
+                        break
+            
+            if dest_matches:
                 results['application_rules'].append(rule)
     
     return results
-
-def matches_network_rule(rule, source_ip, destination_ip, rule_name):
-    """Check if a network rule matches the search criteria"""
-    # Check source IP only if provided
-    source_matches = True
-    if source_ip and source_ip.strip():
-        # Check all possible source fields that actually exist
-        source_addresses = rule.get('sourceAddresses', [])
-        source_ip_groups = rule.get('sourceIpGroups', [])
-        source_service_tags = rule.get('sourceServiceTags', [])
-        all_sources = source_addresses + source_ip_groups + source_service_tags
-        
-        source_matches = any(source_ip in addr for addr in all_sources)
-    
-    # Check destination IP/FQDN only if provided
-    dest_matches = True
-    if destination_ip and destination_ip.strip():
-        # Check all possible destination fields that actually exist
-        ip_destinations = rule.get('destinationAddresses', [])
-        fqdn_destinations = rule.get('destinationFqdns', [])
-        ip_group_destinations = rule.get('destinationIpGroups', [])
-        service_tag_destinations = rule.get('destinationServiceTags', [])
-        all_destinations = ip_destinations + fqdn_destinations + ip_group_destinations + service_tag_destinations
-        
-        dest_matches = any(destination_ip in dest for dest in all_destinations)
-    
-    # Check rule name only if provided
-    name_matches = True
-    if rule_name and rule_name.strip():
-        rule_name_value = rule.get('name', '')
-        name_matches = rule_name.strip().lower() in rule_name_value.lower()
-    
-    return source_matches and dest_matches and name_matches
-
-def matches_application_rule(rule, source_ip, destination_ip, rule_name):
-    """Check if an application rule matches the search criteria"""
-    # Check source IP only if provided
-    source_matches = True
-    if source_ip and source_ip.strip():
-        # Check all possible source fields that actually exist
-        source_addresses = rule.get('sourceAddresses', [])
-        source_ip_groups = rule.get('sourceIpGroups', [])
-        source_service_tags = rule.get('sourceServiceTags', [])
-        all_sources = source_addresses + source_ip_groups + source_service_tags
-        
-        source_matches = any(source_ip in addr for addr in all_sources)
-    
-    # Check destination FQDN only if provided
-    dest_matches = True
-    if destination_ip and destination_ip.strip():
-        # Check all possible destination fields that actually exist
-        fqdn_destinations = rule.get('targetFqdns', [])
-        url_destinations = rule.get('targetUrls', [])
-        service_tag_destinations = rule.get('destinationServiceTags', [])
-        all_destinations = fqdn_destinations + url_destinations + service_tag_destinations
-        
-        dest_matches = any(destination_ip in dest for dest in all_destinations)
-    
-    # Check rule name only if provided
-    name_matches = True
-    if rule_name and rule_name.strip():
-        rule_name_value = rule.get('name', '')
-        name_matches = rule_name.strip().lower() in rule_name_value.lower()
-    
-    return source_matches and dest_matches and name_matches
 
 def display_search_results(results):
     """Display search results in a formatted way"""
