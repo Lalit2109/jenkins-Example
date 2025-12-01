@@ -88,7 +88,13 @@ Write-Host "Existing repositories in project '$ProjectName': $($repoSet.Count)"
 
 # ---------------------- Create missing repos ----------------------
 
-foreach ($repoName in $desiredRepos) {
+foreach ($rawName in $desiredRepos) {
+    # Extra safety: trim again while iterating
+    $repoName = $rawName.Trim()
+    if ([string]::IsNullOrWhiteSpace($repoName)) {
+        continue
+    }
+
     if ($repoSet.Contains($repoName)) {
         Write-Host "Skipping '$repoName' (already exists)."
         continue
