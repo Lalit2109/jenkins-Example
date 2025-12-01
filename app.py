@@ -96,7 +96,7 @@ def main():
     # Handle background refresh
     handle_background_refresh()
     
-    # Policy selector (multi-policy support) - gated by feature flag
+    # Policy selector initialization (multi-policy support) - gated by feature flag
     if is_feature_enabled("enable_multi_policy"):
         if "policy_catalog" not in st.session_state:
             st.session_state.policy_catalog = []
@@ -107,8 +107,19 @@ def main():
         if "current_rules" not in st.session_state:
             st.session_state.current_rules = None
 
-        with st.container():
-            st.markdown("### Policy", unsafe_allow_html=True)
+    # Render sidebar
+    render_sidebar(azure_service, environment)
+    
+    # Main content area with minimal whitespace
+    # Use st.empty() to create a custom layout
+    main_content = st.empty()
+    with main_content.container():
+        # Main page heading
+        st.title("Azure Firewall Policy Rule Analyzer")
+        
+        # Policy selector (multi-policy support) - gated by feature flag
+        # Place it after the title for better layout
+        if is_feature_enabled("enable_multi_policy"):
             if not st.session_state.policy_catalog:
                 with st.spinner("Discovering Firewall Policies across subscriptions…"):
                     try:
@@ -126,28 +137,21 @@ def main():
                         if p["id"] == st.session_state.selected_policy_id:
                             index = i
                             break
-                sel = st.selectbox("Select a Firewall Policy", labels, index=index, key="policy_selectbox")
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    sel = st.selectbox("Select a Firewall Policy", labels, index=index, key="policy_selectbox")
+                with col2:
+                    st.markdown("<br>", unsafe_allow_html=True)  # Align with selectbox
+                
                 chosen = catalog[labels.index(sel)]
                 if chosen["id"] != st.session_state.selected_policy_id:
                     st.session_state.selected_policy_id = chosen["id"]
                     st.session_state.current_policy = None
                     st.session_state.current_rules = None
-                    # Clear all cached data when policy changes
-                    clear_all_cached_data()
                     st.rerun()
             else:
                 st.info("No policies discovered or Azure is not configured. The app will use the previous single-policy loader.")
-
-    # Render sidebar
-    render_sidebar(azure_service, environment)
-    
-    # Main content area with minimal whitespace
-    # Use st.empty() to create a custom layout
-    main_content = st.empty()
-    with main_content.container():
-        st.markdown("""
-            <h1 style="margin-top: 0px; padding-top: 0px; margin-bottom: 1rem;">Azure Firewall Policy Rule Analyzer</h1>
-            """, unsafe_allow_html=True)
     
     # Load policy data
     rules = None
@@ -155,32 +159,14 @@ def main():
     if st.session_state.get("selected_policy_id"):
         if st.session_state.current_rules is None:
             with st.spinner("Loading selected policy…"):
-                try:
-                    policy_json, rules = load_policy_rules(st.session_state.selected_policy_id)
-                    # cache in session
-                    st.session_state.current_policy = policy_json
-                    st.session_state.current_rules = rules
-                    # expose to legacy renderers that might read from session
-                    st.session_state.rules = rules
-                    st.session_state.policy_source = "Azure (selected policy)"
-                    st.session_state.loaded_file_name = policy_json.get("policy", {}).get("name", "selected_policy")
-                    
-                    # Debug: show what was loaded
-                    if rules:
-                        network_count = len(rules.get('network', []))
-                        app_count = len(rules.get('application', []))
-                        if network_count == 0 and app_count == 0:
-                            st.warning(f"⚠️ Policy loaded but no rules found. Policy has {len(policy_json.get('ruleCollectionGroups', []))} rule collection groups.")
-                            logger.warning(f"No rules parsed from policy. RCGs: {len(policy_json.get('ruleCollectionGroups', []))}")
-                        else:
-                            st.success(f"✅ Loaded {network_count} network rules and {app_count} application rules")
-                    else:
-                        st.error("❌ Failed to parse policy rules")
-                except Exception as e:
-                    logger.error(f"Error loading policy: {e}", exc_info=True)
-                    st.error(f"❌ Error loading policy: {str(e)}")
-                    rules = {"network": [], "application": []}
-                    policy_json = {"policy": {}, "ruleCollectionGroups": []}
+                policy_json, rules = load_policy_rules(st.session_state.selected_policy_id)
+                # cache in session
+                st.session_state.current_policy = policy_json
+                st.session_state.current_rules = rules
+                # expose to legacy renderers that might read from session
+                st.session_state.rules = rules
+                st.session_state.policy_source = "Azure (selected policy)"
+                st.session_state.loaded_file_name = policy_json.get("policy", {}).get("name", "selected_policy")
         else:
             policy_json = st.session_state.current_policy
             rules = st.session_state.current_rules
@@ -247,29 +233,6 @@ def display_file_information():
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Failed to refresh data: {str(e)}")
-
-def clear_all_cached_data():
-    """Clear all cached data when policy changes"""
-    # Clear optimization cache
-    cache_keys_to_clear = [
-        'permissive_chart_data',
-        'redundancy_chart_data',
-        'selected_permissive_issue',
-        'selected_redundancy_type',
-        # Clear UI component toggles
-        'show_network_table',
-        'show_app_table',
-        'show_all_rules',
-        # Clear search form state (if any cached)
-        'search_form',
-        'compare_form',
-    ]
-    
-    for key in cache_keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
-    
-    logger.info("Cleared all cached data for policy change")
 
 def initialize_session_state():
     """Initialize session state variables"""
