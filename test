@@ -1,0 +1,515 @@
+<#
+.SYNOPSIS
+    Backs up Azure DevOps Git repositories to Azure Blob Storage with hierarchical organization.
+
+.DESCRIPTION
+    This script retrieves all Git repositories from Azure DevOps, clones them with --mirror,
+    compresses them, and uploads to Azure Blob Storage in a hierarchical structure:
+    Container/ProjectName/RepositoryName/YYYY-MM-DD.zip
+
+.PARAMETER ResourceGroupName
+    Azure Resource Group name containing the storage account.
+
+.PARAMETER StorageAccountName
+    Azure Storage Account name.
+
+.PARAMETER ContainerName
+    Azure Blob Storage container name. Default: "repobackups"
+
+.PARAMETER RetentionDays
+    Number of days to retain backups. Older backups will be deleted. Default: 365
+
+.PARAMETER LogPath
+    Path to log file. Default: ".\backup-$(Get-Date -Format 'yyyy-MM-dd').log"
+
+.PARAMETER AzureDevOpsAccount
+    Azure DevOps organization URL. Default: uses VSTeam account if already set.
+
+.PARAMETER AccessToken
+    Azure DevOps Personal Access Token. If not provided, uses $env:SYSTEM_ACCESSTOKEN
+
+.PARAMETER ProjectName
+    Optional: Filter to backup only repositories from this project.
+
+.PARAMETER RepositoryName
+    Optional: Filter to backup only this specific repository.
+
+.EXAMPLE
+    .\backupRepos.ps1 -ResourceGroupName "<ResourceGroupName>" -StorageAccountName "<StorageAccountName>"
+
+.EXAMPLE
+    .\backupRepos.ps1 -ResourceGroupName "<ResourceGroupName>" -StorageAccountName "<StorageAccountName>" -ProjectName "MyProject" -RepositoryName "MyRepo"
+
+.NOTES
+    Requires: VSTeam PowerShell module, Az.Storage module, Git
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$ResourceGroupName,
+    
+    [Parameter(Mandatory = $true)]
+    [string]$StorageAccountName,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$ContainerName = "repobackups",
+    
+    [Parameter(Mandatory = $false)]
+    [int]$RetentionDays = 365,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$LogPath = ".\backup-$(Get-Date -Format 'yyyy-MM-dd').log",
+    
+    [Parameter(Mandatory = $false)]
+    [string]$AzureDevOpsAccount,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$AccessToken = $env:SYSTEM_ACCESSTOKEN,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$ProjectName,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$RepositoryName
+)
+
+#region Helper Functions
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO"
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    
+    # Use string formatting to avoid quote issues - PowerShell best practice
+    $logMessage = "{0} [{1}] {2}" -f $timestamp, $Level, $Message
+    
+    # Write to console with colors - standard PowerShell Write-Host
+    switch ($Level) {
+        "ERROR" { Write-Host $logMessage -ForegroundColor Red }
+        "WARNING" { Write-Host $logMessage -ForegroundColor Yellow }
+        "SUCCESS" { Write-Host $logMessage -ForegroundColor Green }
+        default { Write-Host $logMessage }
+    }
+    
+    # Write to log file if LogPath is defined
+    if ($LogPath) {
+        try {
+            Add-Content -Path $LogPath -Value $logMessage -ErrorAction SilentlyContinue
+        } catch {
+            # If log file write fails, continue without logging
+        }
+    }
+}
+
+function Test-Prerequisites {
+    Write-Log "Checking prerequisites..." "INFO"
+    
+    $prerequisites = @{
+        "Git" = "git"
+        "VSTeam Module" = "VSTeam"
+        "Az.Storage Module" = "Az.Storage"
+    }
+    
+    $allPresent = $true
+    
+    foreach ($prereq in $prerequisites.GetEnumerator()) {
+        if ($prereq.Value -eq "git") {
+            try {
+                $null = git --version 2>&1
+                Write-Log "$($prereq.Key) is installed" "SUCCESS"
+            } catch {
+                Write-Log "$($prereq.Key) is not installed or not in PATH" "ERROR"
+                $allPresent = $false
+            }
+        } else {
+            $module = Get-Module -ListAvailable -Name $prereq.Value
+            if ($module) {
+                Write-Log "$($prereq.Key) module is installed" "SUCCESS"
+            } else {
+                Write-Log "$($prereq.Key) module is not installed" "ERROR"
+                $allPresent = $false
+            }
+        }
+    }
+    
+    return $allPresent
+}
+
+function Install-RequiredModules {
+    Write-Log "Installing required PowerShell modules..." "INFO"
+    
+    try {
+        if (-not (Get-Module -ListAvailable -Name VSTeam)) {
+            Write-Log "Installing VSTeam module..." "INFO"
+            Install-Module -Name VSTeam -Scope CurrentUser -Force -ErrorAction Stop
+        }
+        
+        if (-not (Get-Module -ListAvailable -Name Az.Storage)) {
+            Write-Log "Installing Az.Storage module..." "INFO"
+            Install-Module -Name Az.Storage -Scope CurrentUser -Force -ErrorAction Stop
+        }
+        
+        Import-Module VSTeam -ErrorAction Stop
+        Import-Module Az.Storage -ErrorAction Stop
+        
+        Write-Log "Modules installed and imported successfully" "SUCCESS"
+        return $true
+    } catch {
+        Write-Log "Failed to install/import modules: $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+}
+
+function Sanitize-Name {
+    param([string]$Name)
+    
+    # Replace spaces and special characters with hyphens
+    $sanitized = $Name -replace '[^\w\-]', '-' -replace '\s+', '-' -replace '-+', '-'
+    $sanitized = $sanitized.Trim('-')
+    
+    return $sanitized
+}
+
+function Get-BackupManifest {
+    param(
+        [array]$Repositories,
+        [string]$Date
+    )
+    
+    $manifest = @{
+        GeneratedDate = $Date
+        TotalRepositories = $Repositories.Count
+        Repositories = @()
+    }
+    
+    foreach ($repo in $Repositories) {
+        $manifest.Repositories += @{
+            Project = $repo.Project
+            Repository = $repo.Name
+            BackupDate = $Date
+            BlobPath = "$($repo.Project)/$($repo.Name)/$Date.zip"
+        }
+    }
+    
+    return $manifest
+}
+
+#endregion
+
+#region Main Script
+
+try {
+    Write-Log "========================================" "INFO"
+    Write-Log "Azure DevOps Repository Backup Script" "INFO"
+    Write-Log "========================================" "INFO"
+    Write-Log "Start time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "INFO"
+    
+    # Check prerequisites
+    if (-not (Test-Prerequisites)) {
+        Write-Log "Some prerequisites are missing. Attempting to install modules..." "WARNING"
+        if (-not (Install-RequiredModules)) {
+            throw "Failed to install required modules. Please install manually."
+        }
+    }
+    
+    # Import modules
+    Import-Module VSTeam -ErrorAction Stop
+    Import-Module Az.Storage -ErrorAction Stop
+    
+    # Configure Azure DevOps connection
+    if ($AzureDevOpsAccount) {
+        if ($AccessToken) {
+            Write-Log "Configuring Azure DevOps account: $AzureDevOpsAccount" "INFO"
+            Set-VSTeamAccount -Account $AzureDevOpsAccount -Token $AccessToken -UseBearerToken -ErrorAction Stop
+        } else {
+            throw "AccessToken is required when AzureDevOpsAccount is specified"
+        }
+    } else {
+        Write-Log "Using existing VSTeam account configuration" "INFO"
+    }
+    
+    # Get Azure Storage Account
+    Write-Log "Connecting to Azure Storage Account: $StorageAccountName" "INFO"
+    try {
+        $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -ErrorAction Stop
+        $storageContext = $storageAccount.Context
+        Write-Log "Successfully connected to storage account" "SUCCESS"
+    } catch {
+        throw "Failed to connect to Azure Storage Account: $($_.Exception.Message)"
+    }
+    
+    # Ensure container exists
+    Write-Log "Checking container: $ContainerName" "INFO"
+    $container = Get-AzStorageContainer -Name $ContainerName -Context $storageContext -ErrorAction SilentlyContinue
+    if (-not $container) {
+        Write-Log "Container does not exist. Creating container: $ContainerName" "INFO"
+        $container = New-AzStorageContainer -Name $ContainerName -Context $storageContext -Permission Off -ErrorAction Stop
+        Write-Log "Container created successfully" "SUCCESS"
+    }
+    
+    # Get current date for backup naming
+    $date = Get-Date -Format "yyyy-MM-dd"
+    Write-Log "Backup date: $date" "INFO"
+    
+    # Get all repositories from Azure DevOps
+    Write-Log "Retrieving repositories from Azure DevOps..." "INFO"
+    try {
+        $repos = Get-VSTeamGitRepository -ErrorAction Stop
+        Write-Log "Found $($repos.Count) repositories" "SUCCESS"
+    } catch {
+        throw "Failed to retrieve repositories: $($_.Exception.Message)"
+    }
+    
+    if ($repos.Count -eq 0) {
+        Write-Log "No repositories found. Exiting." "WARNING"
+        exit 0
+    }
+    
+    # Process repositories
+    $repoList = @()
+    foreach ($repo in $repos) {
+        # TODO: Added for Testing Purposes, remove this once tested
+        if ($repo.ProjectName -ne "Infrastructure ") {
+            continue
+        }
+        if ($repo.Name -ne "sdsdsdsd") {
+            continue
+        }
+        
+        # Filter by project name if specified
+        if ($ProjectName -and $repo.ProjectName -ne $ProjectName) {
+            continue
+        }
+        
+        # Filter by repository name if specified
+        if ($RepositoryName -and $repo.Name -ne $RepositoryName) {
+            continue
+        }
+        
+        try {
+            # Extract URL path (remove https://dev.azure.com/OrganizationName/)
+            $remoteUrl = $repo.RemoteUrl
+            if ($remoteUrl -match "https://[^/]+/(.+)$") {
+                $url = $matches[1]
+            } else {
+                # Fallback to substring if regex doesn't match
+                if ($remoteUrl.Length -gt 30) {
+                    $url = $remoteUrl.Substring(30)
+                } else {
+                    throw "Invalid remote URL format: $remoteUrl"
+                }
+            }
+            
+            # Construct authenticated URL
+            if (-not $AccessToken -or $AccessToken -eq "") {
+                throw "AccessToken is empty. Cannot clone repository without authentication."
+            }
+            $url = "https://$AccessToken@$url"
+            
+            $sanitizedProject = Sanitize-Name -Name $repo.ProjectName
+            $sanitizedRepo = Sanitize-Name -Name (($repo.RemoteUrl).Split('/') | Select-Object -Last 1)
+            
+            $repoList += [PSCustomObject]@{
+                Name = $sanitizedRepo
+                OriginalName = (($repo.RemoteUrl).Split('/') | Select-Object -Last 1)
+                Url = $url
+                Project = $sanitizedProject
+                OriginalProject = $repo.ProjectName
+            }
+            
+            Write-Log "Added repository: $($repo.ProjectName)/$($repo.Name)" "INFO"
+        } catch {
+            Write-Log "Error processing repository $($repo.Name): $($_.Exception.Message)" "ERROR"
+        }
+    }
+    
+    Write-Log "Processing $($repoList.Count) repositories..." "INFO"
+    
+    # Validate AccessToken before processing
+    if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
+        throw "AccessToken is empty or not set. Please provide a valid Azure DevOps Personal Access Token via -AccessToken parameter or SYSTEM_ACCESSTOKEN environment variable."
+    }
+    
+    # Backup each repository
+    $successCount = 0
+    $failureCount = 0
+    $processedRepos = @()
+    
+    foreach ($r in $repoList) {
+        try {
+            Write-Log "----------------------------------------" "INFO"
+            Write-Log "Processing: $($r.OriginalProject)/$($r.OriginalName)" "INFO"
+            
+            # Clone repository
+            $repoPath = ".\$($r.Name).git"
+            if (Test-Path $repoPath) {
+                Write-Log "Removing existing clone directory..." "INFO"
+                Remove-Item -Recurse -Force -Path $repoPath -ErrorAction Stop
+            }
+            
+            Write-Log "Cloning repository (mirror)..." "INFO"
+            
+            # Log the URL (without token for security)
+            $urlForLog = $r.Url -replace "https://[^@]+@", "https://***@"
+            Write-Log "Clone URL: $urlForLog" "INFO"
+            
+            # Execute git clone and capture all output
+            $ErrorActionPreference = "Continue"
+            $cloneOutput = & git clone --mirror "$($r.Url)" "$repoPath" 2>&1
+            $exitCode = $LASTEXITCODE
+            
+            if ($exitCode -ne 0 -or -not (Test-Path $repoPath)) {
+                $errorDetails = ""
+                if ($cloneOutput) {
+                    $errorDetails = $cloneOutput | Out-String
+                    $errorDetails = $errorDetails.Trim()
+                }
+                $errorMessage = "Git clone failed with exit code $exitCode"
+                if ($errorDetails) {
+                    $errorMessage = "{0}. Git output: {1}" -f $errorMessage, $errorDetails
+                }
+                throw $errorMessage
+            }
+            
+            Write-Log "Repository cloned successfully" "SUCCESS"
+            
+            # Create backup file name
+            $backupFileName = "$date.zip"
+            $localBackupPath = ".\$backupFileName"
+            
+            # Compress repository
+            Write-Log "Compressing repository..." "INFO"
+            Compress-Archive -Path $repoPath -DestinationPath $localBackupPath -Force -ErrorAction Stop
+            Write-Log "Repository compressed successfully" "SUCCESS"
+            
+            # Get file size
+            $fileSize = (Get-Item $localBackupPath).Length
+            $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+            Write-Log "Backup size: $fileSizeMB MB" "INFO"
+            
+            # Upload to Azure Blob Storage with hierarchical structure
+            $blobPath = "$($r.Project)/$($r.Name)/$backupFileName"
+            Write-Log "Uploading to blob: $blobPath" "INFO"
+            
+            $blobParams = @{
+                File = $localBackupPath
+                Container = $ContainerName
+                Blob = $blobPath
+                Context = $storageContext
+                StandardBlobTier = 'Hot'
+                Force = $true
+            }
+            
+            Set-AzStorageBlobContent @blobParams -ErrorAction Stop
+            Write-Log "Upload completed successfully" "SUCCESS"
+            
+            # Clean up local files
+            Write-Log "Cleaning up local files..." "INFO"
+            Remove-Item -Recurse -Force -Path $repoPath -ErrorAction SilentlyContinue
+            Remove-Item -Force -Path $localBackupPath -ErrorAction SilentlyContinue
+            Write-Log "Local files cleaned up" "SUCCESS"
+            
+            $processedRepos += @{
+                Project = $r.OriginalProject
+                Name = $r.OriginalName
+                BackupDate = $date
+                BlobPath = $blobPath
+                SizeMB = $fileSizeMB
+            }
+            
+            $successCount++
+            Write-Log "Successfully backed up: $($r.OriginalProject)/$($r.OriginalName)" "SUCCESS"
+            
+        } catch {
+            $failureCount++
+            Write-Log "Failed to backup $($r.OriginalProject)/$($r.OriginalName): $($_.Exception.Message)" "ERROR"
+            
+            # Clean up on error
+            if (Test-Path ".\$($r.Name).git") {
+                Remove-Item -Recurse -Force -Path ".\$($r.Name).git" -ErrorAction SilentlyContinue
+            }
+            if (Test-Path ".\$date.zip") {
+                Remove-Item -Force -Path ".\$date.zip" -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    
+    # Generate and upload manifest
+    Write-Log "Generating backup manifest..." "INFO"
+    try {
+        $manifest = Get-BackupManifest -Repositories $processedRepos -Date $date
+        $manifestJson = $manifest | ConvertTo-Json -Depth 10
+        $manifestPath = ".\backup-manifest-$date.json"
+        $manifestJson | Out-File -FilePath $manifestPath -Encoding UTF8
+        
+        $manifestBlobParams = @{
+            File = $manifestPath
+            Container = $ContainerName
+            Blob = "backup-manifest.json"
+            Context = $storageContext
+            Force = $true
+        }
+        
+        Set-AzStorageBlobContent @manifestBlobParams -ErrorAction Stop
+        Remove-Item -Force -Path $manifestPath -ErrorAction SilentlyContinue
+        Write-Log "Manifest uploaded successfully" "SUCCESS"
+    } catch {
+        Write-Log "Failed to upload manifest: $($_.Exception.Message)" "WARNING"
+    }
+    
+    # Apply retention policy
+    if ($RetentionDays -gt 0) {
+        Write-Log "Applying retention policy (keeping backups for $RetentionDays days)..." "INFO"
+        $cutoffDate = (Get-Date).AddDays(-$RetentionDays)
+        
+        try {
+            $allBlobs = Get-AzStorageBlob -Container $ContainerName -Context $storageContext | 
+                Where-Object { $_.Name -like "*/$(Get-Date -Format 'yyyy-MM-dd').zip" -or $_.LastModified -lt $cutoffDate }
+            
+            foreach ($blob in $allBlobs) {
+                $blobDate = [DateTime]::ParseExact($blob.Name.Split('/')[-1].Replace('.zip', ''), 'yyyy-MM-dd', $null)
+                if ($blobDate -lt $cutoffDate) {
+                    Write-Log "Deleting old backup: $($blob.Name)" "INFO"
+                    Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $storageContext -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Write-Log "Retention policy applied" "SUCCESS"
+        } catch {
+            Write-Log "Error applying retention policy: $($_.Exception.Message)" "WARNING"
+        }
+    }
+    
+    # Summary
+    Write-Log "========================================" "INFO"
+    Write-Log "Backup Summary" "INFO"
+    Write-Log "========================================" "INFO"
+    Write-Log "Total repositories: $($repoList.Count)" "INFO"
+    Write-Log "Successful backups: $successCount" "SUCCESS"
+    Write-Log "Failed backups: $failureCount" $(if ($failureCount -gt 0) { "ERROR" } else { "INFO" })
+    Write-Log "End time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "INFO"
+    Write-Log "========================================" "INFO"
+    
+    if ($failureCount -gt 0) {
+        exit 1
+    }
+    
+} catch {
+    Write-Log "Fatal error: $($_.Exception.Message)" "ERROR"
+    if ($_.ScriptStackTrace) {
+        # Sanitize stack trace to prevent string parsing issues
+        # Replace problematic characters that could break PowerShell string parsing
+        $stackTrace = $_.ScriptStackTrace.ToString()
+        $stackTrace = $stackTrace -replace '"', "'"  # Replace double quotes with single quotes
+        $stackTrace = $stackTrace -replace "`r`n", " | " -replace "`n", " | " -replace "`r", " | "  # Replace newlines
+        # Use string formatting to safely include the stack trace
+        Write-Log ("Stack trace: " + $stackTrace) "ERROR"
+    }
+    exit 1
+}
+
+#endregion
+
