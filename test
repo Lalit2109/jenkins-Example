@@ -291,24 +291,17 @@ try {
         }
         
         try {
-            # Extract URL path (remove https://dev.azure.com/OrganizationName/)
+            # Construct authenticated URL by inserting token into the original URL
             $remoteUrl = $repo.RemoteUrl
-            if ($remoteUrl -match "https://[^/]+/(.+)$") {
-                $url = $matches[1]
-            } else {
-                # Fallback to substring if regex doesn't match
-                if ($remoteUrl.Length -gt 30) {
-                    $url = $remoteUrl.Substring(30)
-                } else {
-                    throw "Invalid remote URL format: $remoteUrl"
-                }
-            }
             
-            # Construct authenticated URL
-            if (-not $AccessToken -or $AccessToken -eq "") {
+            # Validate AccessToken
+            if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
                 throw "AccessToken is empty. Cannot clone repository without authentication."
             }
-            $url = "https://$AccessToken@$url"
+            
+            # Replace https:// with https://token@ to add authentication
+            # This preserves the full URL including dev.azure.com
+            $url = $remoteUrl -replace "^https://", "https://$AccessToken@"
             
             $sanitizedProject = Sanitize-Name -Name $repo.ProjectName
             $sanitizedRepo = Sanitize-Name -Name (($repo.RemoteUrl).Split('/') | Select-Object -Last 1)
