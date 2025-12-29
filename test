@@ -530,20 +530,41 @@ try {
     # Apply retention policy
     if ($RetentionDays -gt 0) {
         Write-Log "Applying retention policy (keeping backups for $RetentionDays days)..." "INFO"
-        $cutoffDate = (Get-Date).AddDays(-$RetentionDays)
+        $cutoffDate = (Get-Date).AddDays(-$RetentionDays).Date
+        Write-Log "Cutoff date: $($cutoffDate.ToString('yyyy-MM-dd')) - backups older than this will be deleted" "INFO"
         
         try {
+            # Get all backup zip files (exclude manifest files)
             $allBlobs = Get-AzStorageBlob -Container $ContainerName -Context $storageContext | 
-                Where-Object { $_.Name -like "*/$(Get-Date -Format 'yyyy-MM-dd').zip" -or $_.LastModified -lt $cutoffDate }
+                Where-Object { $_.Name -like "*/*/*.zip" -and $_.Name -notlike "backup-manifest*" }
+            
+            $deletedCount = 0
+            $keptCount = 0
             
             foreach ($blob in $allBlobs) {
-                $blobDate = [DateTime]::ParseExact($blob.Name.Split('/')[-1].Replace('.zip', ''), 'yyyy-MM-dd', $null)
-                if ($blobDate -lt $cutoffDate) {
-                    Write-Log "Deleting old backup: $($blob.Name)" "INFO"
-                    Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $storageContext -Force -ErrorAction SilentlyContinue
+                try {
+                    # Extract date from filename: ProjectName/RepoName/YYYY-MM-DD.zip
+                    $fileName = $blob.Name.Split('/')[-1]
+                    $dateString = $fileName.Replace('.zip', '')
+                    
+                    # Parse the date from filename
+                    $blobDate = [DateTime]::ParseExact($dateString, 'yyyy-MM-dd', $null)
+                    
+                    # Only delete if backup date is older than cutoff
+                    if ($blobDate -lt $cutoffDate) {
+                        Write-Log "Deleting old backup: $($blob.Name) (backup date: $dateString)" "INFO"
+                        Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $storageContext -Force -ErrorAction SilentlyContinue
+                        $deletedCount++
+                    } else {
+                        $keptCount++
+                    }
+                } catch {
+                    # Skip files that don't match the expected date format
+                    Write-Log "Skipping file with invalid date format: $($blob.Name)" "WARNING"
                 }
             }
-            Write-Log "Retention policy applied" "SUCCESS"
+            
+            Write-Log "Retention policy applied: $deletedCount backups deleted, $keptCount backups kept" "SUCCESS"
         } catch {
             Write-Log "Error applying retention policy: $($_.Exception.Message)" "WARNING"
         }
