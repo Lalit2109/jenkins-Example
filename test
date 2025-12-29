@@ -369,6 +369,11 @@ function Get-BackupBlob {
         [string]$LocalPath
     )
     
+    if ([string]::IsNullOrWhiteSpace($BlobName)) {
+        Write-Log "Error: BlobName is empty or null. Cannot download backup." "ERROR"
+        return $false
+    }
+    
     Write-Log "Downloading backup: $BlobName" "INFO"
     
     try {
@@ -425,7 +430,14 @@ function Create-RepositoryIfNeeded {
     
     try {
         # Check if repository exists
-        $existingRepo = Get-VSTeamGitRepository -ProjectName $ProjectName -Name $RepositoryName -ErrorAction SilentlyContinue
+        $existingRepo = $null
+        try {
+            $existingRepo = Get-VSTeamGitRepository -ProjectName $ProjectName -Name $RepositoryName -ErrorAction Stop
+        } catch {
+            # Repository doesn't exist or error occurred - this is expected for new repositories
+            $existingRepo = $null
+        }
+        
         if ($existingRepo) {
             Write-Log "Repository '$RepositoryName' already exists in project '$ProjectName'" "WARNING"
             $action = Read-Host "Repository exists. Options: (S)kip, (O)verwrite, (A)bort [Default: Skip]"
@@ -678,7 +690,12 @@ try {
             foreach ($repo in ($backupStructure[$project].Keys | Sort-Object)) {
                 $backups = @($backupStructure[$project][$repo])
                 $latestDate = Get-LatestBackupDate -Backups $backups
-                $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate })[0]
+                $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate } | Select-Object -First 1)
+                
+                if (-not $backupBlob -or -not $backupBlob.BlobName) {
+                    Write-Log "Warning: No backup found for $project/$repo with date $latestDate. Skipping." "WARNING"
+                    continue
+                }
                 
                 $restoreList += @{
                     SourceProject = $project
@@ -733,7 +750,12 @@ try {
         foreach ($repo in ($backupStructure[$sourceProject].Keys | Sort-Object)) {
             $backups = @($backupStructure[$sourceProject][$repo])
             $latestDate = Get-LatestBackupDate -Backups $backups
-            $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate })[0]
+            $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate } | Select-Object -First 1)
+            
+            if (-not $backupBlob -or -not $backupBlob.BlobName) {
+                Write-Log "Warning: No backup found for $sourceProject/$repo with date $latestDate. Skipping." "WARNING"
+                continue
+            }
             
             $restoreList += @{
                 SourceProject = $sourceProject
@@ -775,7 +797,11 @@ try {
         # Select backup date
         $backups = @($backupStructure[$sourceProject][$sourceRepo])
         $backupDate = Select-BackupDate -Backups $backups -ProjectName $sourceProject -RepoName $sourceRepo
-        $backupBlob = ($backups | Where-Object { $_.Date -eq $backupDate })[0]
+        $backupBlob = ($backups | Where-Object { $_.Date -eq $backupDate } | Select-Object -First 1)
+        
+        if (-not $backupBlob -or -not $backupBlob.BlobName) {
+            throw "No backup found for $sourceProject/$sourceRepo with date $backupDate"
+        }
         
         # Get target project
         $targetProject = Read-Host "Enter target project name (can be different, default: $sourceProject)"
