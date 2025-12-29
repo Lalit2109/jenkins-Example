@@ -261,7 +261,21 @@ function Display-AvailableBackups {
         foreach ($repo in ($BackupStructure[$project].Keys | Sort-Object)) {
             $backups = @($BackupStructure[$project][$repo])
             $latest = Get-LatestBackupDate -Backups $backups
-            $latestSize = ($backups | Where-Object { $_.Date -eq $latest })[0].SizeMB
+            $latestBackupObj = $backups | Where-Object { 
+                $backupDate = if ($_.GetType().Name -eq 'Hashtable') { $_.Date } else { $_.Date }
+                $backupDate -eq $latest
+            } | Select-Object -First 1
+            
+            if ($latestBackupObj) {
+                # Handle both hashtable and PSCustomObject - try multiple access methods
+                if ($latestBackupObj.GetType().Name -eq 'Hashtable' -or $latestBackupObj.GetType().Name -eq 'OrderedDictionary') {
+                    $latestSize = if ($latestBackupObj.ContainsKey('SizeMB')) { $latestBackupObj['SizeMB'] } else { 0 }
+                } else {
+                    $latestSize = if ($latestBackupObj.PSObject.Properties['SizeMB']) { $latestBackupObj.SizeMB } else { 0 }
+                }
+            } else {
+                $latestSize = 0
+            }
             
             $key = "$projectIndex.$repoIndex"
             $repoIndexMap[$key] = @{
@@ -274,7 +288,7 @@ function Display-AvailableBackups {
                 Project = $project
                 Repository = $repo
                 LatestBackup = $latest
-                Size = "$latestSize MB"
+                Size = if ($latestSize -gt 0) { "$latestSize MB" } else { "N/A" }
                 TotalBackups = $backups.Count
             }
             
