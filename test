@@ -1,11 +1,13 @@
 <#
 .SYNOPSIS
-    Backs up Azure DevOps Git repositories to Azure Blob Storage with hierarchical organization.
+    Restores Azure DevOps Git repositories from Azure Blob Storage backups.
 
 .DESCRIPTION
-    This script retrieves all Git repositories from Azure DevOps, clones them with --mirror,
-    compresses them, and uploads to Azure Blob Storage in a hierarchical structure:
-    Container/ProjectName/RepositoryName/YYYY-MM-DD.zip
+    This script restores Git repositories from Azure Blob Storage backups to Azure DevOps.
+    Supports three restore scenarios:
+    1. Full organization restore - restores all projects/repos from backup
+    2. Project restore - restores all repos from a specific project (can use new project name)
+    3. Repository restore - restores a specific repository (can restore to different org/project)
 
 .PARAMETER ResourceGroupName
     Azure Resource Group name containing the storage account.
@@ -16,29 +18,20 @@
 .PARAMETER ContainerName
     Azure Blob Storage container name. Default: "repobackups"
 
-.PARAMETER RetentionDays
-    Number of days to retain backups. Older backups will be deleted. Default: 365
-
 .PARAMETER LogPath
-    Path to log file. Default: ".\backup-$(Get-Date -Format 'yyyy-MM-dd').log"
+    Path to log file. Default: ".\restore-$(Get-Date -Format 'yyyy-MM-dd').log"
 
 .PARAMETER AzureDevOpsAccount
-    Azure DevOps organization URL. Default: uses VSTeam account if already set.
+    Target Azure DevOps organization URL.
 
 .PARAMETER AccessToken
     Azure DevOps Personal Access Token. If not provided, uses $env:SYSTEM_ACCESSTOKEN
 
-.PARAMETER ProjectName
-    Optional: Filter to backup only repositories from this project.
-
-.PARAMETER RepositoryName
-    Optional: Filter to backup only this specific repository.
+.EXAMPLE
+    .\restoreRepos.ps1
 
 .EXAMPLE
-    .\backupRepos.ps1 -ResourceGroupName "<ResourceGroupName>" -StorageAccountName "<StorageAccountName>"
-
-.EXAMPLE
-    .\backupRepos.ps1 -ResourceGroupName "<ResourceGroupName>" -StorageAccountName "<StorageAccountName>" -ProjectName "MyProject" -RepositoryName "MyRepo"
+    .\restoreRepos.ps1 -ResourceGroupName "<ResourceGroupName>" -StorageAccountName "<StorageAccountName>"
 
 .NOTES
     Requires: VSTeam PowerShell module, Az.Storage module, Git
@@ -46,32 +39,23 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$ResourceGroupName,
     
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$StorageAccountName,
     
     [Parameter(Mandatory = $false)]
     [string]$ContainerName = "repobackups",
     
     [Parameter(Mandatory = $false)]
-    [int]$RetentionDays = 365,
-    
-    [Parameter(Mandatory = $false)]
-    [string]$LogPath = ".\backup-$(Get-Date -Format 'yyyy-MM-dd').log",
+    [string]$LogPath = ".\restore-$(Get-Date -Format 'yyyy-MM-dd').log",
     
     [Parameter(Mandatory = $false)]
     [string]$AzureDevOpsAccount,
     
     [Parameter(Mandatory = $false)]
-    [string]$AccessToken = $env:SYSTEM_ACCESSTOKEN,
-    
-    [Parameter(Mandatory = $false)]
-    [string]$ProjectName,
-    
-    [Parameter(Mandatory = $false)]
-    [string]$RepositoryName
+    [string]$AccessToken = $env:SYSTEM_ACCESSTOKEN
 )
 
 #region Helper Functions
@@ -164,75 +148,350 @@ function Install-RequiredModules {
     }
 }
 
-function Sanitize-Name {
-    param([string]$Name)
+function Get-AvailableBackups {
+    param(
+        [object]$StorageContext,
+        [string]$ContainerName
+    )
     
-    # Replace spaces and special characters with hyphens
-    $sanitized = $Name -replace '[^\w\-]', '-' -replace '\s+', '-' -replace '-+', '-'
-    $sanitized = $sanitized.Trim('-')
+    Write-Log "Scanning storage account for available backups..." "INFO"
     
-    return $sanitized
+    try {
+        $allBlobs = Get-AzStorageBlob -Container $ContainerName -Context $StorageContext | 
+            Where-Object { $_.Name -like "*/*/*.zip" -and $_.Name -notlike "backup-manifest*" }
+        
+        $backupStructure = @{}
+        
+        foreach ($blob in $allBlobs) {
+            # Parse blob path: ProjectName/RepositoryName/YYYY-MM-DD.zip
+            $parts = $blob.Name.Split('/')
+            if ($parts.Count -ge 3) {
+                $projectName = $parts[0]
+                $repoName = $parts[1]
+                $fileName = $parts[-1]
+                $dateString = $fileName.Replace('.zip', '')
+                
+                if (-not $backupStructure.ContainsKey($projectName)) {
+                    $backupStructure[$projectName] = @{}
+                }
+                
+                if (-not $backupStructure[$projectName].ContainsKey($repoName)) {
+                    $backupStructure[$projectName][$repoName] = @()
+                }
+                
+                $backupInfo = @{
+                    Date = $dateString
+                    BlobName = $blob.Name
+                    SizeMB = [math]::Round($blob.Length / 1MB, 2)
+                    LastModified = $blob.LastModified
+                }
+                
+                $backupStructure[$projectName][$repoName] += $backupInfo
+            }
+        }
+        
+        # Sort backups by date for each repo
+        foreach ($project in $backupStructure.Keys) {
+            foreach ($repo in $backupStructure[$project].Keys) {
+                $backupStructure[$project][$repo] = $backupStructure[$project][$repo] | 
+                    Sort-Object { [DateTime]::ParseExact($_.Date, 'yyyy-MM-dd', $null) } -Descending
+            }
+        }
+        
+        Write-Log "Found $($backupStructure.Count) projects with backups" "SUCCESS"
+        return $backupStructure
+    } catch {
+        Write-Log "Failed to scan backups: $($_.Exception.Message)" "ERROR"
+        throw
+    }
 }
 
-function Get-FileChecksum {
+function Get-LatestBackupDate {
     param(
-        [string]$FilePath
+        [array]$Backups
+    )
+    
+    if ($Backups.Count -eq 0) {
+        return $null
+    }
+    
+    # Backups are already sorted by date descending
+    return $Backups[0].Date
+}
+
+function Select-RestoreScenario {
+    Write-Log "========================================" "INFO"
+    Write-Log "Restore Scenario Selection" "INFO"
+    Write-Log "========================================" "INFO"
+    Write-Log "1. Full Organization Restore - Restore all projects/repos from backup" "INFO"
+    Write-Log "2. Project Restore - Restore all repos from a specific project" "INFO"
+    Write-Log "3. Repository Restore - Restore a specific repository" "INFO"
+    Write-Log "========================================" "INFO"
+    
+    $choice = ""
+    while ($choice -notin @("1", "2", "3")) {
+        $choice = Read-Host "Select restore scenario (1, 2, or 3)"
+        if ($choice -notin @("1", "2", "3")) {
+            Write-Log "Invalid choice. Please enter 1, 2, or 3." "WARNING"
+        }
+    }
+    
+    return [int]$choice
+}
+
+function Display-AvailableBackups {
+    param(
+        [hashtable]$BackupStructure
+    )
+    
+    Write-Log "========================================" "INFO"
+    Write-Log "Available Backups" "INFO"
+    Write-Log "========================================" "INFO"
+    
+    $projectIndex = 1
+    $repoIndexMap = @{}
+    
+    foreach ($project in ($BackupStructure.Keys | Sort-Object)) {
+        Write-Log "[$projectIndex] Project: $project" "INFO"
+        
+        $repoIndex = 1
+        foreach ($repo in ($BackupStructure[$project].Keys | Sort-Object)) {
+            $backups = $backupStructure[$project][$repo]
+            $latest = Get-LatestBackupDate -Backups $backups
+            $latestSize = ($backups | Where-Object { $_.Date -eq $latest })[0].SizeMB
+            
+            $key = "$projectIndex.$repoIndex"
+            $repoIndexMap[$key] = @{
+                Project = $project
+                Repository = $repo
+            }
+            
+            Write-Log "  [$key] Repository: $repo" "INFO"
+            Write-Log "      Latest: $latest ($latestSize MB)" "INFO"
+            Write-Log "      Available: $($backups.Count) backup(s)" "INFO"
+            
+            $repoIndex++
+        }
+        
+        $projectIndex++
+    }
+    
+    Write-Log "========================================" "INFO"
+    
+    return $repoIndexMap
+}
+
+function Select-BackupDate {
+    param(
+        [array]$Backups,
+        [string]$ProjectName,
+        [string]$RepoName
+    )
+    
+    if ($Backups.Count -eq 1) {
+        Write-Log "Only one backup available: $($Backups[0].Date)" "INFO"
+        return $Backups[0].Date
+    }
+    
+    Write-Log "Available backups for $ProjectName/$RepoName:" "INFO"
+    for ($i = 0; $i -lt $Backups.Count; $i++) {
+        $backup = $Backups[$i]
+        $marker = if ($i -eq 0) { " (Latest)" } else { "" }
+        Write-Log "  [$($i + 1)] $($backup.Date) - $($backup.SizeMB) MB$marker" "INFO"
+    }
+    
+    $choice = ""
+    while ($choice -eq "" -or ([int]$choice -lt 1 -or [int]$choice -gt $Backups.Count)) {
+        $choice = Read-Host "Select backup date (1-$($Backups.Count), default: 1 for latest)"
+        if ($choice -eq "") {
+            $choice = "1"
+        }
+        if ([int]$choice -lt 1 -or [int]$choice -gt $Backups.Count) {
+            Write-Log "Invalid choice. Please enter a number between 1 and $($Backups.Count)." "WARNING"
+            $choice = ""
+        }
+    }
+    
+    return $Backups[[int]$choice - 1].Date
+}
+
+function Get-BackupBlob {
+    param(
+        [object]$StorageContext,
+        [string]$ContainerName,
+        [string]$BlobName,
+        [string]$LocalPath
+    )
+    
+    Write-Log "Downloading backup: $BlobName" "INFO"
+    
+    try {
+        Get-AzStorageBlobContent -Blob $BlobName -Container $ContainerName -Context $StorageContext -Destination $LocalPath -Force -ErrorAction Stop
+        Write-Log "Backup downloaded successfully" "SUCCESS"
+        return $true
+    } catch {
+        Write-Log "Failed to download backup: $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+}
+
+function Create-ProjectIfNeeded {
+    param(
+        [string]$ProjectName,
+        [string]$OrgUrl,
+        [string]$AccessToken
     )
     
     try {
-        $hash = Get-FileHash -Path $FilePath -Algorithm SHA256
-        return $hash.Hash
+        # Check if project exists
+        $existingProject = Get-VSTeamProject -Name $ProjectName -ErrorAction SilentlyContinue
+        if ($existingProject) {
+            Write-Log "Project '$ProjectName' already exists" "INFO"
+            return $true
+        }
+        
+        # Ask for confirmation
+        Write-Log "Project '$ProjectName' does not exist" "WARNING"
+        $confirm = Read-Host "Create new project '$ProjectName'? (Y/N)"
+        if ($confirm -ne "Y" -and $confirm -ne "y") {
+            Write-Log "Project creation cancelled by user" "WARNING"
+            return $false
+        }
+        
+        # Create project
+        Write-Log "Creating project '$ProjectName'..." "INFO"
+        $newProject = Add-VSTeamProject -Name $ProjectName -Description "Restored from backup" -ErrorAction Stop
+        Write-Log "Project '$ProjectName' created successfully" "SUCCESS"
+        return $true
     } catch {
-        return $null
+        Write-Log "Failed to create project '$ProjectName': $($_.Exception.Message)" "ERROR"
+        return $false
     }
 }
 
-function Get-BackupManifest {
+function Create-RepositoryIfNeeded {
     param(
-        [array]$SuccessfulRepos,
-        [array]$FailedRepos,
-        [string]$Date
+        [string]$ProjectName,
+        [string]$RepositoryName,
+        [string]$OrgUrl,
+        [string]$AccessToken
     )
     
-    $totalRepos = $SuccessfulRepos.Count + $FailedRepos.Count
-    
-    $manifest = @{
-        GeneratedDate = $Date
-        GeneratedTimestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-        TotalRepositories = $totalRepos
-        SuccessfulBackups = $SuccessfulRepos.Count
-        FailedBackups = $FailedRepos.Count
-        Repositories = @()
+    try {
+        # Check if repository exists
+        $existingRepo = Get-VSTeamGitRepository -ProjectName $ProjectName -Name $RepositoryName -ErrorAction SilentlyContinue
+        if ($existingRepo) {
+            Write-Log "Repository '$RepositoryName' already exists in project '$ProjectName'" "WARNING"
+            $action = Read-Host "Repository exists. Options: (S)kip, (O)verwrite, (A)bort [Default: Skip]"
+            if ($action -eq "" -or $action -eq "S" -or $action -eq "s") {
+                Write-Log "Skipping repository restore" "INFO"
+                return $null
+            } elseif ($action -eq "A" -or $action -eq "a") {
+                throw "Restore aborted by user"
+            } elseif ($action -eq "O" -or $action -eq "o") {
+                Write-Log "Will overwrite existing repository" "WARNING"
+                return $existingRepo
+            } else {
+                Write-Log "Invalid choice. Skipping repository." "WARNING"
+                return $null
+            }
+        }
+        
+        # Create repository
+        Write-Log "Creating repository '$RepositoryName' in project '$ProjectName'..." "INFO"
+        $newRepo = Add-VSTeamGitRepository -ProjectName $ProjectName -Name $RepositoryName -ErrorAction Stop
+        Write-Log "Repository '$RepositoryName' created successfully" "SUCCESS"
+        return $newRepo
+    } catch {
+        Write-Log "Failed to create repository '$RepositoryName': $($_.Exception.Message)" "ERROR"
+        throw
     }
+}
+
+function Restore-Repository {
+    param(
+        [object]$StorageContext,
+        [string]$ContainerName,
+        [string]$BlobName,
+        [string]$TargetRepoUrl,
+        [string]$AccessToken
+    )
     
-    # Add successful backups
-    foreach ($repo in $SuccessfulRepos) {
-        $manifest.Repositories += @{
-            Project = $repo.Project
-            Repository = $repo.Name
-            Status = "Success"
-            BackupDate = $repo.BackupDate
-            BlobPath = $repo.BlobPath
-            SizeMB = $repo.SizeMB
-            ChecksumSHA256 = $repo.ChecksumSHA256
+    $tempDir = Join-Path $env:TEMP "restore-$(Get-Date -Format 'yyyyMMddHHmmss')"
+    $zipPath = Join-Path $tempDir "backup.zip"
+    $extractPath = Join-Path $tempDir "extracted"
+    
+    try {
+        # Create temp directory
+        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
+        
+        # Download backup
+        if (-not (Get-BackupBlob -StorageContext $StorageContext -ContainerName $ContainerName -BlobName $BlobName -LocalPath $zipPath)) {
+            throw "Failed to download backup"
+        }
+        
+        # Extract backup
+        Write-Log "Extracting backup..." "INFO"
+        Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force -ErrorAction Stop
+        
+        # Find the .git directory (should be the only directory in extracted folder)
+        $gitDirs = Get-ChildItem -Path $extractPath -Directory -Filter "*.git"
+        if ($gitDirs.Count -eq 0) {
+            # Try to find any directory
+            $gitDirs = Get-ChildItem -Path $extractPath -Directory
+        }
+        
+        if ($gitDirs.Count -eq 0) {
+            throw "No repository directory found in backup"
+        }
+        
+        $repoPath = $gitDirs[0].FullName
+        
+        # Validate it's a git repository
+        Push-Location $repoPath
+        try {
+            $gitCheck = git rev-parse --git-dir 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "Extracted directory is not a valid git repository"
+            }
+        } finally {
+            Pop-Location
+        }
+        
+        Write-Log "Repository structure validated" "SUCCESS"
+        
+        # Construct authenticated URL
+        $authenticatedUrl = $TargetRepoUrl -replace "^https://", "https://$AccessToken@"
+        
+        # Push to target repository
+        Write-Log "Pushing repository to target..." "INFO"
+        Push-Location $repoPath
+        try {
+            $pushOutput = & git push --mirror $authenticatedUrl 2>&1
+            $exitCode = $LASTEXITCODE
+            
+            if ($exitCode -ne 0) {
+                $errorDetails = $pushOutput | Out-String
+                throw "Git push failed with exit code $exitCode. Output: $errorDetails"
+            }
+            
+            Write-Log "Repository restored successfully" "SUCCESS"
+        } finally {
+            Pop-Location
+        }
+        
+        return $true
+    } catch {
+        Write-Log "Failed to restore repository: $($_.Exception.Message)" "ERROR"
+        return $false
+    } finally {
+        # Cleanup
+        if (Test-Path $tempDir) {
+            Write-Log "Cleaning up temporary files..." "INFO"
+            Remove-Item -Recurse -Force -Path $tempDir -ErrorAction SilentlyContinue
         }
     }
-    
-    # Add failed backups
-    foreach ($repo in $FailedRepos) {
-        $manifest.Repositories += @{
-            Project = $repo.Project
-            Repository = $repo.Name
-            Status = "Failed"
-            BackupDate = $Date
-            BlobPath = $null
-            SizeMB = $null
-            ChecksumSHA256 = $null
-            ErrorMessage = $repo.ErrorMessage
-        }
-    }
-    
-    return $manifest
 }
 
 #endregion
@@ -241,7 +500,7 @@ function Get-BackupManifest {
 
 try {
     Write-Log "========================================" "INFO"
-    Write-Log "Azure DevOps Repository Backup Script" "INFO"
+    Write-Log "Azure DevOps Repository Restore Script" "INFO"
     Write-Log "========================================" "INFO"
     Write-Log "Start time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "INFO"
     
@@ -257,19 +516,23 @@ try {
     Import-Module VSTeam -ErrorAction Stop
     Import-Module Az.Storage -ErrorAction Stop
     
-    # Configure Azure DevOps connection
-    if ($AzureDevOpsAccount) {
-        if ($AccessToken) {
-            Write-Log "Configuring Azure DevOps account: $AzureDevOpsAccount" "INFO"
-            Set-VSTeamAccount -Account $AzureDevOpsAccount -Token $AccessToken -UseBearerToken -ErrorAction Stop
-        } else {
-            throw "AccessToken is required when AzureDevOpsAccount is specified"
-        }
-    } else {
-        Write-Log "Using existing VSTeam account configuration" "INFO"
+    # Get storage account details
+    if (-not $ResourceGroupName) {
+        $ResourceGroupName = Read-Host "Enter Azure Resource Group name"
     }
     
-    # Get Azure Storage Account
+    if (-not $StorageAccountName) {
+        $StorageAccountName = Read-Host "Enter Azure Storage Account name"
+    }
+    
+    if (-not $ContainerName) {
+        $ContainerName = Read-Host "Enter Container name (default: repobackups)"
+        if ($ContainerName -eq "") {
+            $ContainerName = "repobackups"
+        }
+    }
+    
+    # Connect to Azure Storage
     Write-Log "Connecting to Azure Storage Account: $StorageAccountName" "INFO"
     try {
         $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -ErrorAction Stop
@@ -279,304 +542,243 @@ try {
         throw "Failed to connect to Azure Storage Account: $($_.Exception.Message)"
     }
     
-    # Ensure container exists
+    # Check container exists
     Write-Log "Checking container: $ContainerName" "INFO"
     $container = Get-AzStorageContainer -Name $ContainerName -Context $storageContext -ErrorAction SilentlyContinue
     if (-not $container) {
-        Write-Log "Container does not exist. Creating container: $ContainerName" "INFO"
-        $container = New-AzStorageContainer -Name $ContainerName -Context $storageContext -Permission Off -ErrorAction Stop
-        Write-Log "Container created successfully" "SUCCESS"
+        throw "Container '$ContainerName' does not exist in storage account"
     }
     
-    # Get current date for backup naming
-    $date = Get-Date -Format "yyyy-MM-dd"
-    Write-Log "Backup date: $date" "INFO"
+    # Get available backups
+    $backupStructure = Get-AvailableBackups -StorageContext $storageContext -ContainerName $ContainerName
     
-    # Get all repositories from Azure DevOps
-    Write-Log "Retrieving repositories from Azure DevOps..." "INFO"
-    try {
-        $repos = Get-VSTeamGitRepository -ErrorAction Stop
-        Write-Log "Found $($repos.Count) repositories" "SUCCESS"
-    } catch {
-        throw "Failed to retrieve repositories: $($_.Exception.Message)"
-    }
-    
-    if ($repos.Count -eq 0) {
-        Write-Log "No repositories found. Exiting." "WARNING"
+    if ($backupStructure.Count -eq 0) {
+        Write-Log "No backups found in storage account" "WARNING"
         exit 0
     }
     
-    # Process repositories
-    $repoList = @()
-    foreach ($repo in $repos) {
-        # TODO: Added for Testing Purposes, remove this once tested
-        if ($repo.ProjectName -ne "Infrastructure ") {
-            continue
-        }
-        if ($repo.Name -ne "sdsdsdsd") {
-            continue
-        }
-        
-        # Filter by project name if specified
-        if ($ProjectName -and $repo.ProjectName -ne $ProjectName) {
-            continue
-        }
-        
-        # Filter by repository name if specified
-        if ($RepositoryName -and $repo.Name -ne $RepositoryName) {
-            continue
-        }
-        
-        try {
-            # Construct authenticated URL by inserting token into the original URL
-            $remoteUrl = $repo.RemoteUrl
-            
-            # Validate AccessToken
-            if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
-                throw "AccessToken is empty. Cannot clone repository without authentication."
-            }
-            
-            # Replace https:// with https://token@ to add authentication
-            # This preserves the full URL including dev.azure.com
-            $url = $remoteUrl -replace "^https://", "https://$AccessToken@"
-            
-            $sanitizedProject = Sanitize-Name -Name $repo.ProjectName
-            $sanitizedRepo = Sanitize-Name -Name (($repo.RemoteUrl).Split('/') | Select-Object -Last 1)
-            
-            $repoList += [PSCustomObject]@{
-                Name = $sanitizedRepo
-                OriginalName = (($repo.RemoteUrl).Split('/') | Select-Object -Last 1)
-                Url = $url
-                Project = $sanitizedProject
-                OriginalProject = $repo.ProjectName
-            }
-            
-            Write-Log "Added repository: $($repo.ProjectName)/$($repo.Name)" "INFO"
-        } catch {
-            Write-Log "Error processing repository $($repo.Name): $($_.Exception.Message)" "ERROR"
-        }
+    # Display available backups
+    $repoIndexMap = Display-AvailableBackups -BackupStructure $backupStructure
+    
+    # Select restore scenario
+    $scenario = Select-RestoreScenario
+    
+    # Get target Azure DevOps details
+    if (-not $AzureDevOpsAccount) {
+        $AzureDevOpsAccount = Read-Host "Enter target Azure DevOps organization URL (e.g., https://dev.azure.com/YourOrganization)"
     }
     
-    Write-Log "Processing $($repoList.Count) repositories..." "INFO"
-    
-    # Validate AccessToken before processing
     if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
-        throw "AccessToken is empty or not set. Please provide a valid Azure DevOps Personal Access Token via -AccessToken parameter or SYSTEM_ACCESSTOKEN environment variable."
+        $useEnv = Read-Host "Use SYSTEM_ACCESSTOKEN environment variable? (Y/N)"
+        if ($useEnv -ne "Y" -and $useEnv -ne "y") {
+            $AccessToken = Read-Host "Enter Azure DevOps Personal Access Token" -AsSecureString
+            $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($AccessToken)
+            $AccessToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+        } else {
+            $AccessToken = $env:SYSTEM_ACCESSTOKEN
+        }
     }
     
-    # Backup each repository
+    if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
+        throw "AccessToken is required. Please provide a valid Azure DevOps Personal Access Token."
+    }
+    
+    # Configure Azure DevOps connection
+    Write-Log "Configuring Azure DevOps account: $AzureDevOpsAccount" "INFO"
+    try {
+        Set-VSTeamAccount -Account $AzureDevOpsAccount -Token $AccessToken -UseBearerToken -ErrorAction Stop
+        Write-Log "Successfully connected to Azure DevOps" "SUCCESS"
+    } catch {
+        throw "Failed to connect to Azure DevOps: $($_.Exception.Message)"
+    }
+    
+    # Process restore based on scenario
+    $restoreList = @()
     $successCount = 0
     $failureCount = 0
-    $successfulRepos = @()
-    $failedRepos = @()
     
-    foreach ($r in $repoList) {
+    if ($scenario -eq 1) {
+        # Scenario 1: Full Org Restore
+        Write-Log "========================================" "INFO"
+        Write-Log "Full Organization Restore" "INFO"
+        Write-Log "========================================" "INFO"
+        
+        foreach ($project in ($backupStructure.Keys | Sort-Object)) {
+            foreach ($repo in ($backupStructure[$project].Keys | Sort-Object)) {
+                $backups = $backupStructure[$project][$repo]
+                $latestDate = Get-LatestBackupDate -Backups $backups
+                $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate })[0]
+                
+                $restoreList += @{
+                    SourceProject = $project
+                    SourceRepo = $repo
+                    TargetProject = $project
+                    TargetRepo = $repo
+                    BackupDate = $latestDate
+                    BlobName = $backupBlob.BlobName
+                }
+            }
+        }
+        
+        Write-Log "Will restore $($restoreList.Count) repositories" "INFO"
+        $confirm = Read-Host "Proceed with full restore? (Y/N)"
+        if ($confirm -ne "Y" -and $confirm -ne "y") {
+            Write-Log "Restore cancelled by user" "INFO"
+            exit 0
+        }
+        
+    } elseif ($scenario -eq 2) {
+        # Scenario 2: Project Restore
+        Write-Log "========================================" "INFO"
+        Write-Log "Project Restore" "INFO"
+        Write-Log "========================================" "INFO"
+        
+        # List projects
+        $projects = $backupStructure.Keys | Sort-Object
+        Write-Log "Available projects:" "INFO"
+        for ($i = 0; $i -lt $projects.Count; $i++) {
+            Write-Log "  [$($i + 1)] $($projects[$i])" "INFO"
+        }
+        
+        $projectChoice = ""
+        while ($projectChoice -eq "" -or ([int]$projectChoice -lt 1 -or [int]$projectChoice -gt $projects.Count)) {
+            $projectChoice = Read-Host "Select source project (1-$($projects.Count))"
+            if ([int]$projectChoice -lt 1 -or [int]$projectChoice -gt $projects.Count) {
+                Write-Log "Invalid choice. Please enter a number between 1 and $($projects.Count)." "WARNING"
+                $projectChoice = ""
+            }
+        }
+        
+        $sourceProject = $projects[[int]$projectChoice - 1]
+        Write-Log "Selected source project: $sourceProject" "INFO"
+        
+        # Get target project name
+        $targetProject = Read-Host "Enter target project name (can be new/different, default: $sourceProject)"
+        if ($targetProject -eq "") {
+            $targetProject = $sourceProject
+        }
+        
+        # Build restore list for all repos in the project
+        foreach ($repo in ($backupStructure[$sourceProject].Keys | Sort-Object)) {
+            $backups = $backupStructure[$sourceProject][$repo]
+            $latestDate = Get-LatestBackupDate -Backups $backups
+            $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate })[0]
+            
+            $restoreList += @{
+                SourceProject = $sourceProject
+                SourceRepo = $repo
+                TargetProject = $targetProject
+                TargetRepo = $repo
+                BackupDate = $latestDate
+                BlobName = $backupBlob.BlobName
+            }
+        }
+        
+        Write-Log "Will restore $($restoreList.Count) repositories to project '$targetProject'" "INFO"
+        $confirm = Read-Host "Proceed with project restore? (Y/N)"
+        if ($confirm -ne "Y" -and $confirm -ne "y") {
+            Write-Log "Restore cancelled by user" "INFO"
+            exit 0
+        }
+        
+    } elseif ($scenario -eq 3) {
+        # Scenario 3: Repository Restore
+        Write-Log "========================================" "INFO"
+        Write-Log "Repository Restore" "INFO"
+        Write-Log "========================================" "INFO"
+        
+        # Select repository
+        Write-Log "Enter repository key (e.g., 1.1, 2.3):" "INFO"
+        $repoKey = Read-Host "Repository key"
+        
+        if (-not $repoIndexMap.ContainsKey($repoKey)) {
+            throw "Invalid repository key: $repoKey"
+        }
+        
+        $selectedRepo = $repoIndexMap[$repoKey]
+        $sourceProject = $selectedRepo.Project
+        $sourceRepo = $selectedRepo.Repository
+        
+        Write-Log "Selected repository: $sourceProject/$sourceRepo" "INFO"
+        
+        # Select backup date
+        $backups = $backupStructure[$sourceProject][$sourceRepo]
+        $backupDate = Select-BackupDate -Backups $backups -ProjectName $sourceProject -RepoName $sourceRepo
+        $backupBlob = ($backups | Where-Object { $_.Date -eq $backupDate })[0]
+        
+        # Get target project
+        $targetProject = Read-Host "Enter target project name (can be different, default: $sourceProject)"
+        if ($targetProject -eq "") {
+            $targetProject = $sourceProject
+        }
+        
+        # Get target repo name
+        $targetRepo = Read-Host "Enter target repository name (can be different, default: $sourceRepo)"
+        if ($targetRepo -eq "") {
+            $targetRepo = $sourceRepo
+        }
+        
+        $restoreList += @{
+            SourceProject = $sourceProject
+            SourceRepo = $sourceRepo
+            TargetProject = $targetProject
+            TargetRepo = $targetRepo
+            BackupDate = $backupDate
+            BlobName = $backupBlob.BlobName
+        }
+    }
+    
+    # Execute restores
+    Write-Log "========================================" "INFO"
+    Write-Log "Starting Restore Operations" "INFO"
+    Write-Log "========================================" "INFO"
+    
+    foreach ($restoreItem in $restoreList) {
         try {
             Write-Log "----------------------------------------" "INFO"
-            Write-Log "Processing: $($r.OriginalProject)/$($r.OriginalName)" "INFO"
+            Write-Log "Restoring: $($restoreItem.SourceProject)/$($restoreItem.SourceRepo) -> $($restoreItem.TargetProject)/$($restoreItem.TargetRepo)" "INFO"
+            Write-Log "Backup date: $($restoreItem.BackupDate)" "INFO"
             
-            # Clone repository
-            $repoPath = ".\$($r.Name).git"
-            if (Test-Path $repoPath) {
-                Write-Log "Removing existing clone directory..." "INFO"
-                Remove-Item -Recurse -Force -Path $repoPath -ErrorAction Stop
+            # Create project if needed
+            if (-not (Create-ProjectIfNeeded -ProjectName $restoreItem.TargetProject -OrgUrl $AzureDevOpsAccount -AccessToken $AccessToken)) {
+                Write-Log "Skipping restore due to project creation failure" "WARNING"
+                $failureCount++
+                continue
             }
             
-            Write-Log "Cloning repository (mirror)..." "INFO"
+            # Create repository if needed (or get existing)
+            $targetRepoObj = Create-RepositoryIfNeeded -ProjectName $restoreItem.TargetProject -RepositoryName $restoreItem.TargetRepo -OrgUrl $AzureDevOpsAccount -AccessToken $AccessToken
             
-            # Log the URL (without token for security)
-            $urlForLog = $r.Url -replace "https://[^@]+@", "https://***@"
-            Write-Log "Clone URL: $urlForLog" "INFO"
-            
-            # Execute git clone and capture all output
-            $ErrorActionPreference = "Continue"
-            $cloneOutput = & git clone --mirror "$($r.Url)" "$repoPath" 2>&1
-            $exitCode = $LASTEXITCODE
-            
-            if ($exitCode -ne 0 -or -not (Test-Path $repoPath)) {
-                $errorDetails = ""
-                if ($cloneOutput) {
-                    $errorDetails = $cloneOutput | Out-String
-                    $errorDetails = $errorDetails.Trim()
-                }
-                $errorMessage = "Git clone failed with exit code $exitCode"
-                if ($errorDetails) {
-                    $errorMessage = "{0}. Git output: {1}" -f $errorMessage, $errorDetails
-                }
-                throw $errorMessage
+            if ($null -eq $targetRepoObj) {
+                Write-Log "Skipping repository restore" "INFO"
+                continue
             }
             
-            Write-Log "Repository cloned successfully" "SUCCESS"
+            # Get repository URL
+            $targetRepoUrl = $targetRepoObj.RemoteUrl
             
-            # Create backup file name
-            $backupFileName = "$date.zip"
-            $localBackupPath = ".\$backupFileName"
-            
-            # Compress repository
-            Write-Log "Compressing repository..." "INFO"
-            Compress-Archive -Path $repoPath -DestinationPath $localBackupPath -Force -ErrorAction Stop
-            Write-Log "Repository compressed successfully" "SUCCESS"
-            
-            # Get file size
-            $fileSize = (Get-Item $localBackupPath).Length
-            $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
-            Write-Log "Backup size: $fileSizeMB MB" "INFO"
-            
-            # Calculate checksum
-            Write-Log "Calculating checksum..." "INFO"
-            $checksumSHA256 = Get-FileChecksum -FilePath $localBackupPath
-            if ($checksumSHA256) {
-                Write-Log "Checksum calculated: $checksumSHA256" "INFO"
+            # Restore repository
+            if (Restore-Repository -StorageContext $storageContext -ContainerName $ContainerName -BlobName $restoreItem.BlobName -TargetRepoUrl $targetRepoUrl -AccessToken $AccessToken) {
+                $successCount++
+                Write-Log "Successfully restored: $($restoreItem.TargetProject)/$($restoreItem.TargetRepo)" "SUCCESS"
             } else {
-                Write-Log "Warning: Could not calculate checksum" "WARNING"
+                $failureCount++
+                Write-Log "Failed to restore: $($restoreItem.TargetProject)/$($restoreItem.TargetRepo)" "ERROR"
             }
-            
-            # Upload to Azure Blob Storage with hierarchical structure
-            $blobPath = "$($r.Project)/$($r.Name)/$backupFileName"
-            Write-Log "Uploading to blob: $blobPath" "INFO"
-            
-            $blobParams = @{
-                File = $localBackupPath
-                Container = $ContainerName
-                Blob = $blobPath
-                Context = $storageContext
-                StandardBlobTier = 'Hot'
-                Force = $true
-            }
-            
-            Set-AzStorageBlobContent @blobParams -ErrorAction Stop
-            Write-Log "Upload completed successfully" "SUCCESS"
-            
-            # Clean up local files
-            Write-Log "Cleaning up local files..." "INFO"
-            Remove-Item -Recurse -Force -Path $repoPath -ErrorAction SilentlyContinue
-            Remove-Item -Force -Path $localBackupPath -ErrorAction SilentlyContinue
-            Write-Log "Local files cleaned up" "SUCCESS"
-            
-            # Track successful backup
-            $successfulRepos += @{
-                Project = $r.OriginalProject
-                Name = $r.OriginalName
-                BackupDate = $date
-                BlobPath = $blobPath
-                SizeMB = $fileSizeMB
-                ChecksumSHA256 = $checksumSHA256
-            }
-            
-            $successCount++
-            Write-Log "Successfully backed up: $($r.OriginalProject)/$($r.OriginalName)" "SUCCESS"
             
         } catch {
             $failureCount++
-            $errorMessage = $_.Exception.Message
-            Write-Log "Failed to backup $($r.OriginalProject)/$($r.OriginalName): $errorMessage" "ERROR"
-            
-            # Track failed backup
-            $failedRepos += @{
-                Project = $r.OriginalProject
-                Name = $r.OriginalName
-                ErrorMessage = $errorMessage
-            }
-            
-            # Clean up on error
-            if (Test-Path ".\$($r.Name).git") {
-                Remove-Item -Recurse -Force -Path ".\$($r.Name).git" -ErrorAction SilentlyContinue
-            }
-            if (Test-Path ".\$date.zip") {
-                Remove-Item -Force -Path ".\$date.zip" -ErrorAction SilentlyContinue
-            }
-        }
-    }
-    
-    # Generate and upload manifest
-    Write-Log "Generating backup manifest..." "INFO"
-    try {
-        $manifest = Get-BackupManifest -SuccessfulRepos $successfulRepos -FailedRepos $failedRepos -Date $date
-        $manifestJson = $manifest | ConvertTo-Json -Depth 10
-        
-        # Save manifest with date for historical tracking
-        $manifestFileName = "backup-manifest-$date.json"
-        $manifestPath = ".\$manifestFileName"
-        $manifestJson | Out-File -FilePath $manifestPath -Encoding UTF8
-        
-        # Upload historical manifest (with date)
-        $historicalManifestParams = @{
-            File = $manifestPath
-            Container = $ContainerName
-            Blob = $manifestFileName
-            Context = $storageContext
-            Force = $true
-        }
-        Set-AzStorageBlobContent @historicalManifestParams -ErrorAction Stop
-        Write-Log "Historical manifest uploaded: $manifestFileName" "SUCCESS"
-        
-        # Also upload as latest manifest (without date)
-        $latestManifestParams = @{
-            File = $manifestPath
-            Container = $ContainerName
-            Blob = "backup-manifest.json"
-            Context = $storageContext
-            Force = $true
-        }
-        Set-AzStorageBlobContent @latestManifestParams -ErrorAction Stop
-        Write-Log "Latest manifest uploaded: backup-manifest.json" "SUCCESS"
-        
-        Remove-Item -Force -Path $manifestPath -ErrorAction SilentlyContinue
-        Write-Log "Manifest generation completed successfully" "SUCCESS"
-    } catch {
-        Write-Log "Failed to upload manifest: $($_.Exception.Message)" "WARNING"
-    }
-    
-    # Apply retention policy
-    if ($RetentionDays -gt 0) {
-        Write-Log "Applying retention policy (keeping backups for $RetentionDays days)..." "INFO"
-        $cutoffDate = (Get-Date).AddDays(-$RetentionDays).Date
-        Write-Log "Cutoff date: $($cutoffDate.ToString('yyyy-MM-dd')) - backups older than this will be deleted" "INFO"
-        
-        try {
-            # Get all backup zip files (exclude manifest files)
-            $allBlobs = Get-AzStorageBlob -Container $ContainerName -Context $storageContext | 
-                Where-Object { $_.Name -like "*/*/*.zip" -and $_.Name -notlike "backup-manifest*" }
-            
-            $deletedCount = 0
-            $keptCount = 0
-            
-            foreach ($blob in $allBlobs) {
-                try {
-                    # Extract date from filename: ProjectName/RepoName/YYYY-MM-DD.zip
-                    $fileName = $blob.Name.Split('/')[-1]
-                    $dateString = $fileName.Replace('.zip', '')
-                    
-                    # Parse the date from filename
-                    $blobDate = [DateTime]::ParseExact($dateString, 'yyyy-MM-dd', $null)
-                    
-                    # Only delete if backup date is older than cutoff
-                    if ($blobDate -lt $cutoffDate) {
-                        Write-Log "Deleting old backup: $($blob.Name) (backup date: $dateString)" "INFO"
-                        Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $storageContext -Force -ErrorAction SilentlyContinue
-                        $deletedCount++
-                    } else {
-                        $keptCount++
-                    }
-                } catch {
-                    # Skip files that don't match the expected date format
-                    Write-Log "Skipping file with invalid date format: $($blob.Name)" "WARNING"
-                }
-            }
-            
-            Write-Log "Retention policy applied: $deletedCount backups deleted, $keptCount backups kept" "SUCCESS"
-        } catch {
-            Write-Log "Error applying retention policy: $($_.Exception.Message)" "WARNING"
+            Write-Log "Error restoring $($restoreItem.SourceProject)/$($restoreItem.SourceRepo): $($_.Exception.Message)" "ERROR"
         }
     }
     
     # Summary
     Write-Log "========================================" "INFO"
-    Write-Log "Backup Summary" "INFO"
+    Write-Log "Restore Summary" "INFO"
     Write-Log "========================================" "INFO"
-    Write-Log "Total repositories: $($repoList.Count)" "INFO"
-    Write-Log "Successful backups: $successCount" "SUCCESS"
-    Write-Log "Failed backups: $failureCount" $(if ($failureCount -gt 0) { "ERROR" } else { "INFO" })
+    Write-Log "Total repositories: $($restoreList.Count)" "INFO"
+    Write-Log "Successful restores: $successCount" "SUCCESS"
+    Write-Log "Failed restores: $failureCount" $(if ($failureCount -gt 0) { "ERROR" } else { "INFO" })
     Write-Log "End time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "INFO"
     Write-Log "========================================" "INFO"
     
@@ -587,16 +789,12 @@ try {
 } catch {
     Write-Log "Fatal error: $($_.Exception.Message)" "ERROR"
     if ($_.ScriptStackTrace) {
-        # Sanitize stack trace to prevent string parsing issues
-        # Replace problematic characters that could break PowerShell string parsing
         $stackTrace = $_.ScriptStackTrace.ToString()
-        $stackTrace = $stackTrace -replace '"', "'"  # Replace double quotes with single quotes
-        $stackTrace = $stackTrace -replace "`r`n", " | " -replace "`n", " | " -replace "`r", " | "  # Replace newlines
-        # Use string formatting to safely include the stack trace
+        $stackTrace = $stackTrace -replace '"', "'"
+        $stackTrace = $stackTrace -replace "`r`n", " | " -replace "`n", " | " -replace "`r", " | "
         Write-Log ("Stack trace: " + $stackTrace) "ERROR"
     }
     exit 1
 }
 
 #endregion
-
