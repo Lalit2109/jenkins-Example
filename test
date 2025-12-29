@@ -386,6 +386,43 @@ function Get-BackupBlob {
     }
 }
 
+function Get-AuthenticatedUrl {
+    param(
+        [string]$Url,
+        [string]$AccessToken
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        throw "URL cannot be empty"
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($AccessToken)) {
+        throw "AccessToken cannot be empty"
+    }
+    
+    # Handle URLs that may already have credentials (e.g., https://orgname@dev.azure.com/...)
+    # Find the @ symbol or the first / after https://
+    $schemeEnd = $Url.IndexOf('://') + 3
+    if ($schemeEnd -lt 3) {
+        throw "Invalid URL format: $Url"
+    }
+    
+    $atIndex = $Url.IndexOf('@', $schemeEnd)
+    $firstSlashIndex = $Url.IndexOf('/', $schemeEnd)
+    
+    if ($atIndex -gt 0 -and ($firstSlashIndex -lt 0 -or $atIndex -lt $firstSlashIndex)) {
+        # URL has existing credentials (e.g., orgname@), remove them
+        $urlAfterAt = $Url.Substring($atIndex + 1)
+        $authenticatedUrl = "https://$AccessToken@$urlAfterAt"
+    } else {
+        # No existing credentials, add token after scheme
+        $urlAfterScheme = $Url.Substring($schemeEnd)
+        $authenticatedUrl = "https://$AccessToken@$urlAfterScheme"
+    }
+    
+    return $authenticatedUrl
+}
+
 function Create-ProjectIfNeeded {
     param(
         [string]$ProjectName,
@@ -520,7 +557,7 @@ function Restore-Repository {
         Write-Log "Repository structure validated" "SUCCESS"
         
         # Construct authenticated URL
-        $authenticatedUrl = $TargetRepoUrl -replace "^https://", "https://$AccessToken@"
+        $authenticatedUrl = Get-AuthenticatedUrl -Url $TargetRepoUrl -AccessToken $AccessToken
         
         # Push to target repository
         Write-Log "Pushing repository to target..." "INFO"
