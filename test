@@ -614,18 +614,43 @@ try {
         $AzureDevOpsAccount = Read-Host "Enter target Azure DevOps organization URL (e.g., https://dev.azure.com/YourOrganization)"
     }
     
-    if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
-        $useEnv = Read-Host "Use SYSTEM_ACCESSTOKEN environment variable? (Y/N)"
-        if ($useEnv -ne "Y" -and $useEnv -ne "y") {
-            $AccessToken = Read-Host "Enter Azure DevOps Personal Access Token" -AsSecureString
+    # Check if AccessToken is provided and valid
+    $tokenProvided = $false
+    if ($AccessToken) {
+        if ($AccessToken -is [SecureString]) {
+            # Convert SecureString to plain string
             $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($AccessToken)
-            $AccessToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-        } else {
-            $AccessToken = $env:SYSTEM_ACCESSTOKEN
+            try {
+                $AccessToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+                $tokenProvided = $true
+            } finally {
+                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+            }
+        } elseif ($AccessToken -is [string] -and $AccessToken.Trim() -ne "") {
+            $tokenProvided = $true
         }
     }
     
-    if (-not $AccessToken -or $AccessToken.Trim() -eq "") {
+    if (-not $tokenProvided) {
+        $useEnv = Read-Host "Use SYSTEM_ACCESSTOKEN environment variable? (Y/N)"
+        if ($useEnv -eq "Y" -or $useEnv -eq "y") {
+            $AccessToken = $env:SYSTEM_ACCESSTOKEN
+        } else {
+            $secureToken = Read-Host "Enter Azure DevOps Personal Access Token" -AsSecureString
+            if ($secureToken -and $secureToken -is [SecureString]) {
+                $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+                try {
+                    $AccessToken = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+                } finally {
+                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+                }
+            } else {
+                throw "Failed to read Personal Access Token."
+            }
+        }
+    }
+    
+    if (-not $AccessToken -or ($AccessToken -is [string] -and $AccessToken.Trim() -eq "")) {
         throw "AccessToken is required. Please provide a valid Azure DevOps Personal Access Token."
     }
     
