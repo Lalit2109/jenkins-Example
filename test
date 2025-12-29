@@ -174,24 +174,61 @@ function Sanitize-Name {
     return $sanitized
 }
 
+function Get-FileChecksum {
+    param(
+        [string]$FilePath
+    )
+    
+    try {
+        $hash = Get-FileHash -Path $FilePath -Algorithm SHA256
+        return $hash.Hash
+    } catch {
+        return $null
+    }
+}
+
 function Get-BackupManifest {
     param(
-        [array]$Repositories,
+        [array]$SuccessfulRepos,
+        [array]$FailedRepos,
         [string]$Date
     )
     
+    $totalRepos = $SuccessfulRepos.Count + $FailedRepos.Count
+    
     $manifest = @{
         GeneratedDate = $Date
-        TotalRepositories = $Repositories.Count
+        GeneratedTimestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        TotalRepositories = $totalRepos
+        SuccessfulBackups = $SuccessfulRepos.Count
+        FailedBackups = $FailedRepos.Count
         Repositories = @()
     }
     
-    foreach ($repo in $Repositories) {
+    # Add successful backups
+    foreach ($repo in $SuccessfulRepos) {
         $manifest.Repositories += @{
             Project = $repo.Project
             Repository = $repo.Name
+            Status = "Success"
+            BackupDate = $repo.BackupDate
+            BlobPath = $repo.BlobPath
+            SizeMB = $repo.SizeMB
+            ChecksumSHA256 = $repo.ChecksumSHA256
+        }
+    }
+    
+    # Add failed backups
+    foreach ($repo in $FailedRepos) {
+        $manifest.Repositories += @{
+            Project = $repo.Project
+            Repository = $repo.Name
+            Status = "Failed"
             BackupDate = $Date
-            BlobPath = "$($repo.Project)/$($repo.Name)/$Date.zip"
+            BlobPath = $null
+            SizeMB = $null
+            ChecksumSHA256 = $null
+            ErrorMessage = $repo.ErrorMessage
         }
     }
     
@@ -330,7 +367,8 @@ try {
     # Backup each repository
     $successCount = 0
     $failureCount = 0
-    $processedRepos = @()
+    $successfulRepos = @()
+    $failedRepos = @()
     
     foreach ($r in $repoList) {
         try {
@@ -384,6 +422,15 @@ try {
             $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
             Write-Log "Backup size: $fileSizeMB MB" "INFO"
             
+            # Calculate checksum
+            Write-Log "Calculating checksum..." "INFO"
+            $checksumSHA256 = Get-FileChecksum -FilePath $localBackupPath
+            if ($checksumSHA256) {
+                Write-Log "Checksum calculated: $checksumSHA256" "INFO"
+            } else {
+                Write-Log "Warning: Could not calculate checksum" "WARNING"
+            }
+            
             # Upload to Azure Blob Storage with hierarchical structure
             $blobPath = "$($r.Project)/$($r.Name)/$backupFileName"
             Write-Log "Uploading to blob: $blobPath" "INFO"
@@ -406,12 +453,14 @@ try {
             Remove-Item -Force -Path $localBackupPath -ErrorAction SilentlyContinue
             Write-Log "Local files cleaned up" "SUCCESS"
             
-            $processedRepos += @{
+            # Track successful backup
+            $successfulRepos += @{
                 Project = $r.OriginalProject
                 Name = $r.OriginalName
                 BackupDate = $date
                 BlobPath = $blobPath
                 SizeMB = $fileSizeMB
+                ChecksumSHA256 = $checksumSHA256
             }
             
             $successCount++
@@ -419,7 +468,15 @@ try {
             
         } catch {
             $failureCount++
-            Write-Log "Failed to backup $($r.OriginalProject)/$($r.OriginalName): $($_.Exception.Message)" "ERROR"
+            $errorMessage = $_.Exception.Message
+            Write-Log "Failed to backup $($r.OriginalProject)/$($r.OriginalName): $errorMessage" "ERROR"
+            
+            # Track failed backup
+            $failedRepos += @{
+                Project = $r.OriginalProject
+                Name = $r.OriginalName
+                ErrorMessage = $errorMessage
+            }
             
             # Clean up on error
             if (Test-Path ".\$($r.Name).git") {
@@ -434,22 +491,38 @@ try {
     # Generate and upload manifest
     Write-Log "Generating backup manifest..." "INFO"
     try {
-        $manifest = Get-BackupManifest -Repositories $processedRepos -Date $date
+        $manifest = Get-BackupManifest -SuccessfulRepos $successfulRepos -FailedRepos $failedRepos -Date $date
         $manifestJson = $manifest | ConvertTo-Json -Depth 10
-        $manifestPath = ".\backup-manifest-$date.json"
+        
+        # Save manifest with date for historical tracking
+        $manifestFileName = "backup-manifest-$date.json"
+        $manifestPath = ".\$manifestFileName"
         $manifestJson | Out-File -FilePath $manifestPath -Encoding UTF8
         
-        $manifestBlobParams = @{
+        # Upload historical manifest (with date)
+        $historicalManifestParams = @{
+            File = $manifestPath
+            Container = $ContainerName
+            Blob = $manifestFileName
+            Context = $storageContext
+            Force = $true
+        }
+        Set-AzStorageBlobContent @historicalManifestParams -ErrorAction Stop
+        Write-Log "Historical manifest uploaded: $manifestFileName" "SUCCESS"
+        
+        # Also upload as latest manifest (without date)
+        $latestManifestParams = @{
             File = $manifestPath
             Container = $ContainerName
             Blob = "backup-manifest.json"
             Context = $storageContext
             Force = $true
         }
+        Set-AzStorageBlobContent @latestManifestParams -ErrorAction Stop
+        Write-Log "Latest manifest uploaded: backup-manifest.json" "SUCCESS"
         
-        Set-AzStorageBlobContent @manifestBlobParams -ErrorAction Stop
         Remove-Item -Force -Path $manifestPath -ErrorAction SilentlyContinue
-        Write-Log "Manifest uploaded successfully" "SUCCESS"
+        Write-Log "Manifest generation completed successfully" "SUCCESS"
     } catch {
         Write-Log "Failed to upload manifest: $($_.Exception.Message)" "WARNING"
     }
