@@ -186,15 +186,19 @@ function Get-AvailableBackups {
                     LastModified = $blob.LastModified
                 }
                 
-                $backupStructure[$projectName][$repoName] += $backupInfo
+                # Check if this backup already exists (by blob name) to avoid duplicates
+                $existingBackup = $backupStructure[$projectName][$repoName] | Where-Object { $_.BlobName -eq $blob.Name }
+                if (-not $existingBackup) {
+                    $backupStructure[$projectName][$repoName] += $backupInfo
+                }
             }
         }
         
         # Sort backups by date for each repo
         foreach ($project in $backupStructure.Keys) {
-            foreach ($repo in $backupStructure[$project].Keys) {
-                $backupStructure[$project][$repo] = $backupStructure[$project][$repo] | 
-                    Sort-Object { [DateTime]::ParseExact($_.Date, 'yyyy-MM-dd', $null) } -Descending
+            foreach ($repo in @($backupStructure[$project].Keys)) {
+                $backupStructure[$project][$repo] = @($backupStructure[$project][$repo] | 
+                    Sort-Object { [DateTime]::ParseExact($_.Date, 'yyyy-MM-dd', $null) } -Descending)
             }
         }
         
@@ -250,13 +254,12 @@ function Display-AvailableBackups {
     
     $projectIndex = 1
     $repoIndexMap = @{}
+    $tableData = @()
     
     foreach ($project in ($BackupStructure.Keys | Sort-Object)) {
-        Write-Log "[$projectIndex] Project: $project" "INFO"
-        
         $repoIndex = 1
         foreach ($repo in ($BackupStructure[$project].Keys | Sort-Object)) {
-            $backups = $backupStructure[$project][$repo]
+            $backups = @($BackupStructure[$project][$repo])
             $latest = Get-LatestBackupDate -Backups $backups
             $latestSize = ($backups | Where-Object { $_.Date -eq $latest })[0].SizeMB
             
@@ -266,14 +269,43 @@ function Display-AvailableBackups {
                 Repository = $repo
             }
             
-            Write-Log "  [$key] Repository: $repo" "INFO"
-            Write-Log "      Latest: $latest ($latestSize MB)" "INFO"
-            Write-Log "      Available: $($backups.Count) backup(s)" "INFO"
+            $tableData += [PSCustomObject]@{
+                Key = $key
+                Project = $project
+                Repository = $repo
+                LatestBackup = $latest
+                Size = "$latestSize MB"
+                TotalBackups = $backups.Count
+            }
             
             $repoIndex++
         }
         
         $projectIndex++
+    }
+    
+    # Display as table
+    if ($tableData.Count -gt 0) {
+        Write-Host ""
+        $tableOutput = $tableData | Format-Table -AutoSize | Out-String
+        Write-Host $tableOutput
+        # Also log to file (split by lines)
+        $tableOutput -split "`n" | ForEach-Object {
+            if ($_.Trim() -ne "") {
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                $logMessage = "{0} [INFO] {1}" -f $timestamp, $_
+                if ($LogPath) {
+                    try {
+                        Add-Content -Path $LogPath -Value $logMessage -ErrorAction SilentlyContinue
+                    } catch {
+                        # If log file write fails, continue without logging
+                    }
+                }
+            }
+        }
+        Write-Host ""
+    } else {
+        Write-Log "No backups found" "WARNING"
     }
     
     Write-Log "========================================" "INFO"
@@ -293,7 +325,7 @@ function Select-BackupDate {
         return $Backups[0].Date
     }
     
-    Write-Log "Available backups for $ProjectName/$RepoName:" "INFO"
+    Write-Log "Available backups for $($ProjectName)/$($RepoName):" "INFO"
     for ($i = 0; $i -lt $Backups.Count; $i++) {
         $backup = $Backups[$i]
         $marker = if ($i -eq 0) { " (Latest)" } else { "" }
@@ -605,7 +637,7 @@ try {
         
         foreach ($project in ($backupStructure.Keys | Sort-Object)) {
             foreach ($repo in ($backupStructure[$project].Keys | Sort-Object)) {
-                $backups = $backupStructure[$project][$repo]
+                $backups = @($backupStructure[$project][$repo])
                 $latestDate = Get-LatestBackupDate -Backups $backups
                 $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate })[0]
                 
@@ -660,7 +692,7 @@ try {
         
         # Build restore list for all repos in the project
         foreach ($repo in ($backupStructure[$sourceProject].Keys | Sort-Object)) {
-            $backups = $backupStructure[$sourceProject][$repo]
+            $backups = @($backupStructure[$sourceProject][$repo])
             $latestDate = Get-LatestBackupDate -Backups $backups
             $backupBlob = ($backups | Where-Object { $_.Date -eq $latestDate })[0]
             
@@ -699,10 +731,10 @@ try {
         $sourceProject = $selectedRepo.Project
         $sourceRepo = $selectedRepo.Repository
         
-        Write-Log "Selected repository: $sourceProject/$sourceRepo" "INFO"
+        Write-Log "Selected repository: $($sourceProject)/$($sourceRepo)" "INFO"
         
         # Select backup date
-        $backups = $backupStructure[$sourceProject][$sourceRepo]
+        $backups = @($backupStructure[$sourceProject][$sourceRepo])
         $backupDate = Select-BackupDate -Backups $backups -ProjectName $sourceProject -RepoName $sourceRepo
         $backupBlob = ($backups | Where-Object { $_.Date -eq $backupDate })[0]
         
