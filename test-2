@@ -1,8 +1,8 @@
 {
 	"info": {
 		"_postman_id": "azure-devops-service-connection-update",
-		"name": "Azure DevOps - Update Service Connection",
-		"description": "Collection to GET and UPDATE Azure DevOps service connection description using Azure App Registration (Application ID and Secret) for OAuth authentication. Tokens are automatically obtained and refreshed as needed.",
+		"name": "Azure DevOps - Service Connection (OAuth Only)",
+		"description": "Collection to manage Azure DevOps service connections using OAuth token only. Includes: Get token, Get service connection, Update description, Refresh credentials.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
@@ -273,7 +273,7 @@
 			"response": []
 		},
 		{
-			"name": "2. Update Service Connection Description",
+			"name": "2. Update Description Only",
 			"event": [
 				{
 					"listen": "prerequest",
@@ -459,12 +459,12 @@
 						}
 					]
 				},
-				"description": "Updates ONLY the service connection description. Automatically uses the full response from the GET request, removes read-only fields, and only modifies the description field. Set 'newDescription' variable to specify the new description."
+				"description": "Updates ONLY the service connection description. Requires running '1. Get Service Connection' first. Automatically uses the full response from GET, removes read-only fields, and only modifies the description field. Set 'newDescription' variable to specify the new description."
 			},
 			"response": []
 		},
 		{
-			"name": "3. Refresh Service Connection Credentials",
+			"name": "3. Refresh Credentials Only",
 			"event": [
 				{
 					"listen": "prerequest",
@@ -633,372 +633,7 @@
 						}
 					]
 				},
-				"description": "Refreshes the service connection credentials (automatic SPN). This triggers Azure DevOps to generate new credentials automatically, similar to updating the description in the UI. Uses the refresh authentication endpoint."
-			},
-			"response": []
-		},
-		{
-			"name": "1a. Get Service Connection (PAT)",
-			"event": [
-				{
-					"listen": "prerequest",
-					"script": {
-						"exec": [
-							"// Generate Base64 encoded PAT for authentication",
-							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
-							"if (!pat) {",
-							"    throw new Error('PAT (Personal Access Token) is required. Set it in environment or collection variables.');",
-							"}",
-							"",
-							"// Base64 encode PAT (format: base64(:PAT))",
-							"const authString = ':' + pat;",
-							"const base64Auth = btoa(authString);",
-							"pm.environment.set('base64Auth', base64Auth);",
-							"",
-							"// Build URL",
-							"const org = pm.environment.get('organization') || pm.collectionVariables.get('organization');",
-							"const project = pm.environment.get('project') || pm.collectionVariables.get('project');",
-							"const endpointId = pm.environment.get('endpointId') || pm.collectionVariables.get('endpointId');",
-							"",
-							"if (!org || !endpointId) {",
-							"    throw new Error('Organization and EndpointId are required.');",
-							"}",
-							"",
-							"// Build URL with optional project parameter",
-							"let url = `https://dev.azure.com/${org}`;",
-							"if (project) {",
-							"    url += `/${project}`;",
-							"}",
-							"url += `/_apis/serviceendpoint/endpoints/${endpointId}?api-version=7.1-preview.4`;",
-							"",
-							"pm.request.url = url;"
-						],
-						"type": "text/javascript"
-					}
-				},
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"// Save the response to collection variable for PUT request",
-							"if (pm.response.code === 200) {",
-							"    const responseJson = pm.response.json();",
-							"    pm.collectionVariables.set('serviceConnectionData', JSON.stringify(responseJson));",
-							"    console.log('Service connection data saved for PUT request');",
-							"    ",
-							"    // Also save individual fields for reference",
-							"    pm.collectionVariables.set('currentDescription', responseJson.description || '');",
-							"} else {",
-							"    console.log('GET request failed:', pm.response.code);",
-							"}"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "GET",
-				"header": [
-					{
-						"key": "Authorization",
-						"value": "Basic {{base64Auth}}",
-						"type": "text"
-					},
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					}
-				],
-				"url": {
-					"raw": "https://dev.azure.com/{{organization}}/{{project}}/_apis/serviceendpoint/endpoints/{{endpointId}}?api-version=7.1-preview.4",
-					"protocol": "https",
-					"host": [
-						"dev",
-						"azure",
-						"com"
-					],
-					"path": [
-						"{{organization}}",
-						"{{project}}",
-						"_apis",
-						"serviceendpoint",
-						"endpoints",
-						"{{endpointId}}"
-					],
-					"query": [
-						{
-							"key": "api-version",
-							"value": "7.1-preview.4"
-						}
-					]
-				},
-				"description": "Alternative: GET request using PAT (Personal Access Token) authentication. Use this if OAuth token authentication fails."
-			},
-			"response": []
-		},
-		{
-			"name": "2a. Update Service Connection Description (PAT)",
-			"event": [
-				{
-					"listen": "prerequest",
-					"script": {
-						"exec": [
-							"// Generate Base64 encoded PAT for authentication",
-							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
-							"if (!pat) {",
-							"    throw new Error('PAT (Personal Access Token) is required.');",
-							"}",
-							"",
-							"const authString = ':' + pat;",
-							"const base64Auth = btoa(authString);",
-							"pm.environment.set('base64Auth', base64Auth);",
-							"",
-							"// Get saved service connection data from GET request",
-							"const savedData = pm.collectionVariables.get('serviceConnectionData');",
-							"if (!savedData) {",
-							"    throw new Error('No service connection data found. Please run the GET request first.');",
-							"}",
-							"",
-							"// Parse the saved data",
-							"let serviceConnection = JSON.parse(savedData);",
-							"",
-							"// Remove read-only fields that shouldn't be sent in PUT",
-							"delete serviceConnection.createdBy;",
-							"delete serviceConnection.administratorsGroup;",
-							"delete serviceConnection.readersGroup;",
-							"delete serviceConnection.groupScopeId;",
-							"delete serviceConnection.operationStatus;",
-							"",
-							"// Handle authorization parameters - remove null passwords/secrets",
-							"if (serviceConnection.authorization && serviceConnection.authorization.parameters) {",
-							"    const authParams = serviceConnection.authorization.parameters;",
-							"    // Remove null values (these are masked secrets from GET)",
-							"    Object.keys(authParams).forEach(key => {",
-							"        if (authParams[key] === null || authParams[key] === undefined) {",
-							"            delete authParams[key];",
-							"        }",
-							"    });",
-							"}",
-							"",
-							"// Get new description from environment/collection variable or use default",
-							"const newDescription = pm.environment.get('newDescription') || pm.collectionVariables.get('newDescription') || 'Updated description';",
-							"",
-							"// Update description",
-							"serviceConnection.description = newDescription;",
-							"",
-							"// Set the request body",
-							"pm.request.body.raw = JSON.stringify(serviceConnection, null, 2);",
-							"pm.request.body.options = {",
-							"    raw: {",
-							"        language: 'json'",
-							"    }",
-							"};",
-							"",
-							"// Build URL (PUT endpoint does not include project parameter per official docs)",
-							"const org = pm.environment.get('organization') || pm.collectionVariables.get('organization');",
-							"const endpointId = pm.environment.get('endpointId') || pm.collectionVariables.get('endpointId');",
-							"",
-							"if (!org || !endpointId) {",
-							"    throw new Error('Organization and EndpointId are required.');",
-							"}",
-							"",
-							"// Build URL without project parameter (as per official documentation)",
-							"const url = `https://dev.azure.com/${org}/_apis/serviceendpoint/endpoints/${endpointId}?api-version=7.1-preview.4`;",
-							"",
-							"pm.request.url = url;",
-							"",
-							"console.log('Updating description to:', newDescription);"
-						],
-						"type": "text/javascript"
-					}
-				},
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"if (pm.response.code === 200) {",
-							"    console.log('Service connection description updated successfully!');",
-							"    const responseJson = pm.response.json();",
-							"    pm.collectionVariables.set('updatedDescription', responseJson.description || '');",
-							"} else {",
-							"    console.log('Update failed:', pm.response.code, pm.response.text());",
-							"}"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "PUT",
-				"header": [
-					{
-						"key": "Authorization",
-						"value": "Basic {{base64Auth}}",
-						"type": "text"
-					},
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"id\": \"{{endpointId}}\",\n    \"name\": \"ServiceConnection\",\n    \"type\": \"generic\",\n    \"url\": \"https://example.com\",\n    \"authorization\": {},\n    \"data\": {},\n    \"description\": \"{{newDescription}}\"\n}",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
-					}
-				},
-				"url": {
-					"raw": "https://dev.azure.com/{{organization}}/_apis/serviceendpoint/endpoints/{{endpointId}}?api-version=7.1-preview.4",
-					"protocol": "https",
-					"host": [
-						"dev",
-						"azure",
-						"com"
-					],
-					"path": [
-						"{{organization}}",
-						"_apis",
-						"serviceendpoint",
-						"endpoints",
-						"{{endpointId}}"
-					],
-					"query": [
-						{
-							"key": "api-version",
-							"value": "7.1-preview.4"
-						}
-					]
-				},
-				"description": "Alternative: PUT request using PAT (Personal Access Token) authentication. Use this if OAuth token authentication fails. Automatically uses the full response from the GET request, removes read-only fields, and only modifies the description field."
-			},
-			"response": []
-		},
-		{
-			"name": "3a. Refresh Service Connection Credentials (PAT)",
-			"event": [
-				{
-					"listen": "prerequest",
-					"script": {
-						"exec": [
-							"// Generate Base64 encoded PAT for authentication",
-							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
-							"if (!pat) {",
-							"    throw new Error('PAT (Personal Access Token) is required.');",
-							"}",
-							"",
-							"const authString = ':' + pat;",
-							"const base64Auth = btoa(authString);",
-							"pm.environment.set('base64Auth', base64Auth);",
-							"",
-							"// Get endpoint ID",
-							"const endpointId = pm.environment.get('endpointId') || pm.collectionVariables.get('endpointId');",
-							"const org = pm.environment.get('organization') || pm.collectionVariables.get('organization');",
-							"const project = pm.environment.get('project') || pm.collectionVariables.get('project');",
-							"",
-							"if (!org || !endpointId) {",
-							"    throw new Error('Organization and EndpointId are required.');",
-							"}",
-							"",
-							"// Build URL for refresh endpoint (requires project parameter)",
-							"let url = `https://dev.azure.com/${org}`;",
-							"if (project) {",
-							"    url += `/${project}`;",
-							"}",
-							"url += `/_apis/serviceendpoint/endpoints?endpointIds=${endpointId}&api-version=7.1`;",
-							"",
-							"pm.request.url = url;",
-							"",
-							"// Build request body for refresh",
-							"const refreshBody = [{",
-							"    endpointId: endpointId,",
-							"    tokenValidityInMinutes: 60",
-							"}];",
-							"",
-							"pm.request.body.raw = JSON.stringify(refreshBody, null, 2);",
-							"pm.request.body.options = {",
-							"    raw: {",
-							"        language: 'json'",
-							"    }",
-							"};",
-							"",
-							"console.log('Refreshing credentials for endpoint:', endpointId);"
-						],
-						"type": "text/javascript"
-					}
-				},
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"if (pm.response.code === 200) {",
-							"    console.log('Service connection credentials refreshed successfully!');",
-							"    const responseJson = pm.response.json();",
-							"    if (responseJson && responseJson.length > 0) {",
-							"        console.log('Refreshed endpoint:', responseJson[0].name);",
-							"    }",
-							"} else {",
-							"    console.log('Refresh failed:', pm.response.code, pm.response.text());",
-							"}"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Authorization",
-						"value": "Basic {{base64Auth}}",
-						"type": "text"
-					},
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "[\n    {\n        \"endpointId\": \"{{endpointId}}\",\n        \"tokenValidityInMinutes\": 60\n    }\n]",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
-					}
-				},
-				"url": {
-					"raw": "https://dev.azure.com/{{organization}}/{{project}}/_apis/serviceendpoint/endpoints?endpointIds={{endpointId}}&api-version=7.1",
-					"protocol": "https",
-					"host": [
-						"dev",
-						"azure",
-						"com"
-					],
-					"path": [
-						"{{organization}}",
-						"{{project}}",
-						"_apis",
-						"serviceendpoint",
-						"endpoints"
-					],
-					"query": [
-						{
-							"key": "endpointIds",
-							"value": "{{endpointId}}"
-						},
-						{
-							"key": "api-version",
-							"value": "7.1"
-						}
-					]
-				},
-				"description": "Alternative: Refresh service connection credentials using PAT authentication. This triggers Azure DevOps to generate new credentials automatically for automatic SPN service connections."
+				"description": "Refreshes ONLY the service connection credentials (automatic SPN). This triggers Azure DevOps to generate new credentials automatically, similar to updating the description in the UI. Does not modify the description."
 			},
 			"response": []
 		}
@@ -1038,12 +673,6 @@
 			"key": "newDescription",
 			"value": "Updated description",
 			"type": "string"
-		},
-		{
-			"key": "pat",
-			"value": "your-personal-access-token",
-			"type": "string"
 		}
 	]
 }
-
