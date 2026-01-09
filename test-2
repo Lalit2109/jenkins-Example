@@ -1,0 +1,267 @@
+{
+	"info": {
+		"_postman_id": "azure-devops-service-connection-update",
+		"name": "Azure DevOps - Update Service Connection",
+		"description": "Collection to GET and UPDATE Azure DevOps service connection description",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Get Service Connection",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"// Generate Base64 encoded PAT for authentication",
+							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
+							"if (!pat) {",
+							"    throw new Error('PAT (Personal Access Token) is required. Set it in environment or collection variables.');",
+							"}",
+							"",
+							"// Base64 encode PAT (format: base64(:PAT))",
+							"const authString = ':' + pat;",
+							"const base64Auth = btoa(authString);",
+							"pm.environment.set('base64Auth', base64Auth);",
+							"",
+							"// Build URL",
+							"const org = pm.environment.get('organization') || pm.collectionVariables.get('organization');",
+							"const project = pm.environment.get('project') || pm.collectionVariables.get('project');",
+							"const endpointId = pm.environment.get('endpointId') || pm.collectionVariables.get('endpointId');",
+							"",
+							"if (!org || !endpointId) {",
+							"    throw new Error('Organization and EndpointId are required.');",
+							"}",
+							"",
+							"// Build URL with optional project parameter",
+							"let url = `https://dev.azure.com/${org}`;",
+							"if (project) {",
+							"    url += `/${project}`;",
+							"}",
+							"url += `/_apis/serviceendpoint/endpoints/${endpointId}?api-version=7.1-preview.4`;",
+							"",
+							"pm.request.url = url;"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// Save the response to collection variable for PUT request",
+							"if (pm.response.code === 200) {",
+							"    const responseJson = pm.response.json();",
+							"    pm.collectionVariables.set('serviceConnectionData', JSON.stringify(responseJson));",
+							"    console.log('Service connection data saved for PUT request');",
+							"    ",
+							"    // Also save individual fields for reference",
+							"    pm.collectionVariables.set('currentDescription', responseJson.description || '');",
+							"} else {",
+							"    console.log('GET request failed:', pm.response.code);",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Basic {{base64Auth}}",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "https://dev.azure.com/{{organization}}/{{project}}/_apis/serviceendpoint/endpoints/{{endpointId}}?api-version=7.1-preview.4",
+					"protocol": "https",
+					"host": [
+						"dev",
+						"azure",
+						"com"
+					],
+					"path": [
+						"{{organization}}",
+						"{{project}}",
+						"_apis",
+						"serviceendpoint",
+						"endpoints",
+						"{{endpointId}}"
+					],
+					"query": [
+						{
+							"key": "api-version",
+							"value": "7.1-preview.4"
+						}
+					]
+				},
+				"description": "Retrieves the current service connection configuration. The response is automatically saved for use in the PUT request."
+			},
+			"response": []
+		},
+		{
+			"name": "2. Update Service Connection Description",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"// Generate Base64 encoded PAT for authentication",
+							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
+							"if (!pat) {",
+							"    throw new Error('PAT (Personal Access Token) is required.');",
+							"}",
+							"",
+							"const authString = ':' + pat;",
+							"const base64Auth = btoa(authString);",
+							"pm.environment.set('base64Auth', base64Auth);",
+							"",
+							"// Get saved service connection data from GET request",
+							"const savedData = pm.collectionVariables.get('serviceConnectionData');",
+							"if (!savedData) {",
+							"    throw new Error('No service connection data found. Please run the GET request first.');",
+							"}",
+							"",
+							"// Parse the saved data",
+							"let serviceConnection = JSON.parse(savedData);",
+							"",
+							"// Get new description from environment/collection variable or use default",
+							"const newDescription = pm.environment.get('newDescription') || pm.collectionVariables.get('newDescription') || 'Updated description';",
+							"",
+							"// Update description",
+							"serviceConnection.description = newDescription;",
+							"",
+							"// Set the request body",
+							"pm.request.body.raw = JSON.stringify(serviceConnection, null, 2);",
+							"pm.request.body.options = {",
+							"    raw: {",
+							"        language: 'json'",
+							"    }",
+							"};",
+							"",
+							"// Build URL",
+							"const org = pm.environment.get('organization') || pm.collectionVariables.get('organization');",
+							"const project = pm.environment.get('project') || pm.collectionVariables.get('project');",
+							"const endpointId = pm.environment.get('endpointId') || pm.collectionVariables.get('endpointId');",
+							"",
+							"if (!org || !endpointId) {",
+							"    throw new Error('Organization and EndpointId are required.');",
+							"}",
+							"",
+							"// Build URL with optional project parameter",
+							"let url = `https://dev.azure.com/${org}`;",
+							"if (project) {",
+							"    url += `/${project}`;",
+							"}",
+							"url += `/_apis/serviceendpoint/endpoints/${endpointId}?api-version=7.1-preview.4`;",
+							"",
+							"pm.request.url = url;",
+							"",
+							"console.log('Updating description to:', newDescription);"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"if (pm.response.code === 200) {",
+							"    console.log('Service connection updated successfully!');",
+							"    const responseJson = pm.response.json();",
+							"    pm.collectionVariables.set('updatedDescription', responseJson.description || '');",
+							"} else {",
+							"    console.log('Update failed:', pm.response.code, pm.response.text());",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "PUT",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Basic {{base64Auth}}",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"id\": \"{{endpointId}}\",\n    \"name\": \"ServiceConnection\",\n    \"type\": \"generic\",\n    \"url\": \"https://example.com\",\n    \"authorization\": {},\n    \"data\": {},\n    \"description\": \"{{newDescription}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "https://dev.azure.com/{{organization}}/{{project}}/_apis/serviceendpoint/endpoints/{{endpointId}}?api-version=7.1-preview.4",
+					"protocol": "https",
+					"host": [
+						"dev",
+						"azure",
+						"com"
+					],
+					"path": [
+						"{{organization}}",
+						"{{project}}",
+						"_apis",
+						"serviceendpoint",
+						"endpoints",
+						"{{endpointId}}"
+					],
+					"query": [
+						{
+							"key": "api-version",
+							"value": "7.1-preview.4"
+						}
+					]
+				},
+				"description": "Updates the service connection description. Automatically uses the full response from the GET request and only modifies the description field. Set 'newDescription' variable to specify the new description."
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "organization",
+			"value": "your-organization",
+			"type": "string"
+		},
+		{
+			"key": "project",
+			"value": "your-project",
+			"type": "string"
+		},
+		{
+			"key": "endpointId",
+			"value": "your-endpoint-id-guid",
+			"type": "string"
+		},
+		{
+			"key": "pat",
+			"value": "your-personal-access-token",
+			"type": "string"
+		},
+		{
+			"key": "newDescription",
+			"value": "Updated description",
+			"type": "string"
+		}
+	]
+}
+
