@@ -2,10 +2,124 @@
 	"info": {
 		"_postman_id": "azure-devops-service-connection-update",
 		"name": "Azure DevOps - Update Service Connection",
-		"description": "Collection to GET and UPDATE Azure DevOps service connection description",
+		"description": "Collection to GET and UPDATE Azure DevOps service connection description using Azure App Registration (Application ID and Secret) for OAuth authentication. Tokens are automatically obtained and refreshed as needed.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
+		{
+			"name": "0. Get OAuth Token",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"// Get credentials from environment or collection variables",
+							"const tenantId = pm.environment.get('tenantId') || pm.collectionVariables.get('tenantId');",
+							"const applicationId = pm.environment.get('applicationId') || pm.collectionVariables.get('applicationId');",
+							"const applicationSecret = pm.environment.get('applicationSecret') || pm.collectionVariables.get('applicationSecret');",
+							"",
+							"if (!tenantId || !applicationId || !applicationSecret) {",
+							"    throw new Error('tenantId, applicationId, and applicationSecret are required.');",
+							"}",
+							"",
+							"// Build token URL",
+							"const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;",
+							"pm.request.url = tokenUrl;",
+							"",
+							"// Build request body for client credentials flow",
+							"const body = {",
+							"    client_id: applicationId,",
+							"    client_secret: applicationSecret,",
+							"    scope: '499b84ac-1321-427f-aa17-267ca6975798/.default',",
+							"    grant_type: 'client_credentials'",
+							"};",
+							"",
+							"// Set request body",
+							"pm.request.body.urlencoded = Object.keys(body).map(key => ({",
+							"    key: key,",
+							"    value: body[key]",
+							"}));"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"if (pm.response.code === 200) {",
+							"    const responseJson = pm.response.json();",
+							"    const accessToken = responseJson.access_token;",
+							"    const expiresIn = responseJson.expires_in || 3600;",
+							"    ",
+							"    // Save token and expiration time",
+							"    pm.collectionVariables.set('accessToken', accessToken);",
+							"    pm.collectionVariables.set('tokenExpiresAt', Date.now() + (expiresIn * 1000));",
+							"    ",
+							"    console.log('OAuth token obtained successfully');",
+							"    console.log('Token expires in:', expiresIn, 'seconds');",
+							"} else {",
+							"    console.log('Failed to get OAuth token:', pm.response.code, pm.response.text());",
+							"    throw new Error('Failed to obtain OAuth token');",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/x-www-form-urlencoded",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "urlencoded",
+					"urlencoded": [
+						{
+							"key": "client_id",
+							"value": "{{applicationId}}",
+							"type": "text"
+						},
+						{
+							"key": "client_secret",
+							"value": "{{applicationSecret}}",
+							"type": "text"
+						},
+						{
+							"key": "scope",
+							"value": "499b84ac-1321-427f-aa17-267ca6975798/.default",
+							"type": "text"
+						},
+						{
+							"key": "grant_type",
+							"value": "client_credentials",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "https://login.microsoftonline.com/{{tenantId}}/oauth2/v2.0/token",
+					"protocol": "https",
+					"host": [
+						"login",
+						"microsoftonline",
+						"com"
+					],
+					"path": [
+						"{{tenantId}}",
+						"oauth2",
+						"v2.0",
+						"token"
+					]
+				},
+				"description": "Gets OAuth access token using Azure App Registration (Application ID and Secret) via client credentials flow. Token is automatically saved for use in subsequent requests."
+			},
+			"response": []
+		},
 		{
 			"name": "1. Get Service Connection",
 			"event": [
@@ -13,16 +127,68 @@
 					"listen": "prerequest",
 					"script": {
 						"exec": [
-							"// Generate Base64 encoded PAT for authentication",
-							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
-							"if (!pat) {",
-							"    throw new Error('PAT (Personal Access Token) is required. Set it in environment or collection variables.');",
+							"// Get or refresh OAuth token",
+							"const accessToken = pm.collectionVariables.get('accessToken');",
+							"const tokenExpiresAt = pm.collectionVariables.get('tokenExpiresAt');",
+							"const now = Date.now();",
+							"",
+							"// Check if token exists and is not expired (with 5 minute buffer)",
+							"if (!accessToken || !tokenExpiresAt || now >= (tokenExpiresAt - 300000)) {",
+							"    console.log('Token missing or expired. Getting new token...');",
+							"    ",
+							"    // Get credentials",
+							"    const tenantId = pm.environment.get('tenantId') || pm.collectionVariables.get('tenantId');",
+							"    const applicationId = pm.environment.get('applicationId') || pm.collectionVariables.get('applicationId');",
+							"    const applicationSecret = pm.environment.get('applicationSecret') || pm.collectionVariables.get('applicationSecret');",
+							"    ",
+							"    if (!tenantId || !applicationId || !applicationSecret) {",
+							"        throw new Error('tenantId, applicationId, and applicationSecret are required.');",
+							"    }",
+							"    ",
+							"    // Request new token",
+							"    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;",
+							"    const tokenRequest = {",
+							"        url: tokenUrl,",
+							"        method: 'POST',",
+							"        header: {",
+							"            'Content-Type': 'application/x-www-form-urlencoded'",
+							"        },",
+							"        body: {",
+							"            mode: 'urlencoded',",
+							"            urlencoded: [",
+							"                { key: 'client_id', value: applicationId },",
+							"                { key: 'client_secret', value: applicationSecret },",
+							"                { key: 'scope', value: '499b84ac-1321-427f-aa17-267ca6975798/.default' },",
+							"                { key: 'grant_type', value: 'client_credentials' }",
+							"            ]",
+							"        }",
+							"    };",
+							"    ",
+							"    pm.sendRequest(tokenRequest, function (err, res) {",
+							"        if (err) {",
+							"            throw new Error('Failed to get OAuth token: ' + err);",
+							"        }",
+							"        if (res.code === 200) {",
+							"            const tokenData = res.json();",
+							"            pm.collectionVariables.set('accessToken', tokenData.access_token);",
+							"            pm.collectionVariables.set('tokenExpiresAt', now + (tokenData.expires_in * 1000));",
+							"            console.log('New OAuth token obtained');",
+							"        } else {",
+							"            throw new Error('Failed to get OAuth token: ' + res.code + ' - ' + res.text());",
+							"        }",
+							"    });",
+							"    ",
+							"    // Wait a moment for async request to complete",
+							"    // Note: In Postman, this is synchronous in pre-request",
 							"}",
 							"",
-							"// Base64 encode PAT (format: base64(:PAT))",
-							"const authString = ':' + pat;",
-							"const base64Auth = btoa(authString);",
-							"pm.environment.set('base64Auth', base64Auth);",
+							"// Set Bearer token in header",
+							"const currentToken = pm.collectionVariables.get('accessToken');",
+							"pm.request.headers.remove('Authorization');",
+							"pm.request.headers.add({",
+							"    key: 'Authorization',",
+							"    value: 'Bearer ' + currentToken",
+							"});",
 							"",
 							"// Build URL",
 							"const org = pm.environment.get('organization') || pm.collectionVariables.get('organization');",
@@ -70,7 +236,7 @@
 				"header": [
 					{
 						"key": "Authorization",
-						"value": "Basic {{base64Auth}}",
+						"value": "Bearer {{accessToken}}",
 						"type": "text"
 					},
 					{
@@ -113,15 +279,65 @@
 					"listen": "prerequest",
 					"script": {
 						"exec": [
-							"// Generate Base64 encoded PAT for authentication",
-							"const pat = pm.environment.get('pat') || pm.collectionVariables.get('pat');",
-							"if (!pat) {",
-							"    throw new Error('PAT (Personal Access Token) is required.');",
+							"// Get or refresh OAuth token",
+							"const accessToken = pm.collectionVariables.get('accessToken');",
+							"const tokenExpiresAt = pm.collectionVariables.get('tokenExpiresAt');",
+							"const now = Date.now();",
+							"",
+							"// Check if token exists and is not expired (with 5 minute buffer)",
+							"if (!accessToken || !tokenExpiresAt || now >= (tokenExpiresAt - 300000)) {",
+							"    console.log('Token missing or expired. Getting new token...');",
+							"    ",
+							"    // Get credentials",
+							"    const tenantId = pm.environment.get('tenantId') || pm.collectionVariables.get('tenantId');",
+							"    const applicationId = pm.environment.get('applicationId') || pm.collectionVariables.get('applicationId');",
+							"    const applicationSecret = pm.environment.get('applicationSecret') || pm.collectionVariables.get('applicationSecret');",
+							"    ",
+							"    if (!tenantId || !applicationId || !applicationSecret) {",
+							"        throw new Error('tenantId, applicationId, and applicationSecret are required.');",
+							"    }",
+							"    ",
+							"    // Request new token",
+							"    const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;",
+							"    const tokenRequest = {",
+							"        url: tokenUrl,",
+							"        method: 'POST',",
+							"        header: {",
+							"            'Content-Type': 'application/x-www-form-urlencoded'",
+							"        },",
+							"        body: {",
+							"            mode: 'urlencoded',",
+							"            urlencoded: [",
+							"                { key: 'client_id', value: applicationId },",
+							"                { key: 'client_secret', value: applicationSecret },",
+							"                { key: 'scope', value: '499b84ac-1321-427f-aa17-267ca6975798/.default' },",
+							"                { key: 'grant_type', value: 'client_credentials' }",
+							"            ]",
+							"        }",
+							"    };",
+							"    ",
+							"    pm.sendRequest(tokenRequest, function (err, res) {",
+							"        if (err) {",
+							"            throw new Error('Failed to get OAuth token: ' + err);",
+							"        }",
+							"        if (res.code === 200) {",
+							"            const tokenData = res.json();",
+							"            pm.collectionVariables.set('accessToken', tokenData.access_token);",
+							"            pm.collectionVariables.set('tokenExpiresAt', now + (tokenData.expires_in * 1000));",
+							"            console.log('New OAuth token obtained');",
+							"        } else {",
+							"            throw new Error('Failed to get OAuth token: ' + res.code + ' - ' + res.text());",
+							"        }",
+							"    });",
 							"}",
 							"",
-							"const authString = ':' + pat;",
-							"const base64Auth = btoa(authString);",
-							"pm.environment.set('base64Auth', base64Auth);",
+							"// Set Bearer token in header",
+							"const currentToken = pm.collectionVariables.get('accessToken');",
+							"pm.request.headers.remove('Authorization');",
+							"pm.request.headers.add({",
+							"    key: 'Authorization',",
+							"    value: 'Bearer ' + currentToken",
+							"});",
 							"",
 							"// Get saved service connection data from GET request",
 							"const savedData = pm.collectionVariables.get('serviceConnectionData');",
@@ -190,7 +406,7 @@
 				"header": [
 					{
 						"key": "Authorization",
-						"value": "Basic {{base64Auth}}",
+						"value": "Bearer {{accessToken}}",
 						"type": "text"
 					},
 					{
@@ -253,8 +469,18 @@
 			"type": "string"
 		},
 		{
-			"key": "pat",
-			"value": "your-personal-access-token",
+			"key": "tenantId",
+			"value": "your-tenant-id",
+			"type": "string"
+		},
+		{
+			"key": "applicationId",
+			"value": "your-application-id",
+			"type": "string"
+		},
+		{
+			"key": "applicationSecret",
+			"value": "your-application-secret",
 			"type": "string"
 		},
 		{
