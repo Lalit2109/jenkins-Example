@@ -401,7 +401,7 @@ function Export-ToHtml {
             </div>
             <div class="summary-card">
                 <h3>Current Monthly Cost</h3>
-                <div class="value">`$$([math]::Round($totalCurrentCost, 2))</div>
+                <div class="value">£$([math]::Round($totalCurrentCost, 2))</div>
                 <div class="label">RAGRS Pricing</div>
             </div>
             <div class="summary-card">
@@ -411,7 +411,7 @@ function Export-ToHtml {
             </div>
             <div class="summary-card">
                 <h3>Potential Annual Savings</h3>
-                <div class="value">`$$([math]::Round([Math]::Max($totalZRSSavings, [Math]::Max($totalLRSSavings, $totalGRSSavings)), 2))</div>
+                <div class="value">£$([math]::Round([Math]::Max($totalZRSSavings, [Math]::Max($totalLRSSavings, $totalGRSSavings)), 2))</div>
                 <div class="label">If converted appropriately</div>
             </div>
         </div>
@@ -457,10 +457,10 @@ function Export-ToHtml {
                     <td>$($row.Environment)</td>
                     <td>$([math]::Round($row.DataSizeGB, 2))</td>
                     <td>$secondaryReadStatus</td>
-                    <td>`$$([math]::Round($row.CurrentMonthlyCost, 2))</td>
-                    <td>`$$([math]::Round($row.ZRSAnnualSavings, 2))</td>
-                    <td>`$$([math]::Round($row.GRSAnnualSavings, 2))</td>
-                    <td>`$$([math]::Round($row.LRSAnnualSavings, 2))</td>
+                    <td>£$([math]::Round($row.CurrentMonthlyCost, 2))</td>
+                    <td>£$([math]::Round($row.ZRSAnnualSavings, 2))</td>
+                    <td>£$([math]::Round($row.GRSAnnualSavings, 2))</td>
+                    <td>£$([math]::Round($row.LRSAnnualSavings, 2))</td>
                     <td><span class="recommendation $recClass">$($row.RecommendedAction)</span></td>
                 </tr>
 "@
