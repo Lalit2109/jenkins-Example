@@ -368,6 +368,13 @@ function Export-ToCsv {
     )
     
     try {
+        # Ensure the directory exists
+        $directory = Split-Path -Path $FilePath -Parent
+        if ($directory -and -not (Test-Path $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            Write-Log "Created directory: $directory"
+        }
+        
         $Data | Export-Csv -Path $FilePath -NoTypeInformation -Encoding UTF8
         Write-Log "CSV report exported to: $FilePath"
     }
@@ -521,6 +528,13 @@ function Export-ToHtml {
 </html>
 "@
         
+        # Ensure the directory exists
+        $directory = Split-Path -Path $FilePath -Parent
+        if ($directory -and -not (Test-Path $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            Write-Log "Created directory: $directory"
+        }
+        
         # Use UTF8 with BOM to ensure proper currency symbol encoding
         $utf8WithBom = New-Object System.Text.UTF8Encoding $true
         [System.IO.File]::WriteAllText($FilePath, $html, $utf8WithBom)
@@ -557,6 +571,14 @@ function Main {
     if ($OutputPath -eq "") {
         $OutputPath = $config.outputDirectory
     }
+    
+    # Resolve relative paths to absolute paths
+    if (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
+        $OutputPath = Join-Path (Get-Location).Path $OutputPath
+    }
+    
+    # Normalize the path (remove .\ or ./)
+    $OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
     
     if (-not (Test-Path $OutputPath)) {
         New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
