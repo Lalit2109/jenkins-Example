@@ -1,253 +1,83 @@
 {
+  "currency": "GBP",
   "analysisPeriodDays": 30,
   "outputDirectory": "./output",
   "environmentPatterns": {
-    "nonProd": ["dev", "test", "qa", "staging", "nonprod", "non-prod"],
-    "prod": ["prod", "production"]
+    "nonProd": [
+      "dev",
+      "test",
+      "qa",
+      "staging",
+      "nonprod",
+      "non-prod"
+    ],
+    "prod": [
+      "prod",
+      "production"
+    ]
   },
   "pricing": {
     "default": {
-      "LRS": 0.0184,
-      "ZRS": 0.023,
-      "GRS": 0.0368,
-      "RAGRS": 0.046
+      "Blob": {
+        "LRS": 0.0145,
+        "ZRS": 0.0181,
+        "GRS": 0.0291,
+        "RAGRS": 0.0363
+      },
+      "File": {
+        "LRS": 0.0145,
+        "ZRS": 0.0181,
+        "GRS": 0.0291,
+        "RAGRS": 0.0363
+      },
+      "Table": {
+        "LRS": 0.0145,
+        "ZRS": 0.0181,
+        "GRS": 0.0291,
+        "RAGRS": 0.0363
+      }
     },
     "regions": {
-      "eastus": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "eastus2": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "westus": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "westus2": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "westus3": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "centralus": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "northcentralus": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "southcentralus": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "westcentralus": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "canadacentral": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "canadaeast": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "brazilsouth": {
-        "LRS": 0.0259,
-        "ZRS": 0.0324,
-        "GRS": 0.0518,
-        "RAGRS": 0.0648
-      },
-      "westeurope": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "northeurope": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
       "uksouth": {
-        "LRS": 0.0193,
-        "ZRS": 0.0241,
-        "GRS": 0.0386,
-        "RAGRS": 0.0483
+        "Blob": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "File": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "Table": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        }
       },
       "ukwest": {
-        "LRS": 0.0193,
-        "ZRS": 0.0241,
-        "GRS": 0.0386,
-        "RAGRS": 0.0483
-      },
-      "francecentral": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "francesouth": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "switzerlandnorth": {
-        "LRS": 0.0230,
-        "ZRS": 0.0288,
-        "GRS": 0.0461,
-        "RAGRS": 0.0576
-      },
-      "switzerlandwest": {
-        "LRS": 0.0230,
-        "ZRS": 0.0288,
-        "GRS": 0.0461,
-        "RAGRS": 0.0576
-      },
-      "germanywestcentral": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "norwayeast": {
-        "LRS": 0.0184,
-        "ZRS": 0.023,
-        "GRS": 0.0368,
-        "RAGRS": 0.046
-      },
-      "southeastasia": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "eastasia": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "japaneast": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "japanwest": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "koreacentral": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "koreasouth": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "australiaeast": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "australiasoutheast": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "australiacentral": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "australiacentral2": {
-        "LRS": 0.0221,
-        "ZRS": 0.0276,
-        "GRS": 0.0442,
-        "RAGRS": 0.0553
-      },
-      "centralindia": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "southindia": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "westindia": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "southafricanorth": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "southafricawest": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "uaenorth": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
-      },
-      "uaecentral": {
-        "LRS": 0.0202,
-        "ZRS": 0.0253,
-        "GRS": 0.0405,
-        "RAGRS": 0.0506
+        "Blob": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "File": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "Table": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        }
       }
     }
   }
 }
-
