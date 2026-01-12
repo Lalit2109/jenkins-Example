@@ -192,15 +192,50 @@ function Get-StorageAccountUsage {
     try {
         $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -ErrorAction Stop
         
-        $metrics = Get-AzMetric -ResourceId $storageAccount.Id -MetricName "UsedCapacity" -TimeGrain 00:01:00 -StartTime (Get-Date).AddDays(-1) -EndTime (Get-Date) -ErrorAction SilentlyContinue
+        # Try to get usage from metrics - suppress deprecation warnings
+        $ErrorActionPreferenceBackup = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
         
-        if ($metrics -and $metrics.Data) {
-            $latestMetric = $metrics.Data | Sort-Object Timestamp -Descending | Select-Object -First 1
-            if ($latestMetric -and $latestMetric.Average) {
-                return [math]::Round($latestMetric.Average / 1GB, 2)
+        # Try multiple time grains and metric names
+        $timeGrains = @("01:00:00", "1:00:00", "00:05:00")
+        $metricNames = @("UsedCapacity", "Capacity")
+        
+        foreach ($metricName in $metricNames) {
+            foreach ($timeGrain in $timeGrains) {
+                try {
+                    $metrics = Get-AzMetric -ResourceId $storageAccount.Id -MetricName $metricName -TimeGrain $timeGrain -StartTime (Get-Date).AddDays(-7) -EndTime (Get-Date) -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+                    
+                    if ($metrics -and $metrics.Data -and $metrics.Data.Count -gt 0) {
+                        $latestMetric = $metrics.Data | Where-Object { $_.Average -ne $null } | Sort-Object Timestamp -Descending | Select-Object -First 1
+                        if ($latestMetric -and $latestMetric.Average -and $latestMetric.Average -gt 0) {
+                            $ErrorActionPreference = $ErrorActionPreferenceBackup
+                            return [math]::Round($latestMetric.Average / 1GB, 2)
+                        }
+                    }
+                }
+                catch {
+                    # Continue to next attempt
+                }
             }
         }
         
+        # Fallback: Try to get from storage account properties if available
+        try {
+            $context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -ErrorAction SilentlyContinue
+            if ($context) {
+                # Try to get blob service stats
+                $blobService = Get-AzStorageServiceProperty -ServiceType Blob -Context $context -ErrorAction SilentlyContinue
+                if ($blobService -and $blobService.Metrics -and $blobService.Metrics.Capacity) {
+                    $ErrorActionPreference = $ErrorActionPreferenceBackup
+                    return [math]::Round($blobService.Metrics.Capacity / 1GB, 2)
+                }
+            }
+        }
+        catch {
+            # Continue
+        }
+        
+        $ErrorActionPreference = $ErrorActionPreferenceBackup
         Write-Log "Could not retrieve usage metrics for $StorageAccountName, using 0" "WARN"
         return 0
     }
@@ -220,7 +255,11 @@ function Get-SecondaryReadUsage {
         $startTime = (Get-Date).AddDays(-$Days)
         $endTime = Get-Date
         
-        $metrics = Get-AzMetric -ResourceId $ResourceId -MetricName "GeoSecondaryRead" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -ErrorAction SilentlyContinue
+        # Suppress deprecation warnings
+        $ErrorActionPreferenceBackup = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        
+        $metrics = Get-AzMetric -ResourceId $ResourceId -MetricName "GeoSecondaryRead" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         
         if (-not $metrics -or -not $metrics.Data) {
             return @{
@@ -233,11 +272,13 @@ function Get-SecondaryReadUsage {
         $totalReads = ($metrics.Data | Measure-Object -Property Total -Sum).Sum
         $avgReads = ($metrics.Data | Measure-Object -Property Average -Average).Average
         
-        $primaryMetrics = Get-AzMetric -ResourceId $ResourceId -MetricName "Transactions" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -ErrorAction SilentlyContinue
+        $primaryMetrics = Get-AzMetric -ResourceId $ResourceId -MetricName "Transactions" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         $totalTransactions = 0
         if ($primaryMetrics -and $primaryMetrics.Data) {
             $totalTransactions = ($primaryMetrics.Data | Measure-Object -Property Total -Sum).Sum
         }
+        
+        $ErrorActionPreference = $ErrorActionPreferenceBackup
         
         $percentage = 0
         if ($totalTransactions -gt 0) {
@@ -357,6 +398,7 @@ function Export-ToHtml {
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Azure RAGRS Storage Analysis Report</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
@@ -401,7 +443,7 @@ function Export-ToHtml {
             </div>
             <div class="summary-card">
                 <h3>Current Monthly Cost</h3>
-                <div class="value">£$([math]::Round($totalCurrentCost, 2))</div>
+                <div class="value">&pound;$([math]::Round($totalCurrentCost, 2))</div>
                 <div class="label">RAGRS Pricing</div>
             </div>
             <div class="summary-card">
@@ -411,7 +453,7 @@ function Export-ToHtml {
             </div>
             <div class="summary-card">
                 <h3>Potential Annual Savings</h3>
-                <div class="value">£$([math]::Round([Math]::Max($totalZRSSavings, [Math]::Max($totalLRSSavings, $totalGRSSavings)), 2))</div>
+                <div class="value">&pound;$([math]::Round([Math]::Max($totalZRSSavings, [Math]::Max($totalLRSSavings, $totalGRSSavings)), 2))</div>
                 <div class="label">If converted appropriately</div>
             </div>
         </div>
@@ -457,10 +499,10 @@ function Export-ToHtml {
                     <td>$($row.Environment)</td>
                     <td>$([math]::Round($row.DataSizeGB, 2))</td>
                     <td>$secondaryReadStatus</td>
-                    <td>£$([math]::Round($row.CurrentMonthlyCost, 2))</td>
-                    <td>£$([math]::Round($row.ZRSAnnualSavings, 2))</td>
-                    <td>£$([math]::Round($row.GRSAnnualSavings, 2))</td>
-                    <td>£$([math]::Round($row.LRSAnnualSavings, 2))</td>
+                    <td>&pound;$([math]::Round($row.CurrentMonthlyCost, 2))</td>
+                    <td>&pound;$([math]::Round($row.ZRSAnnualSavings, 2))</td>
+                    <td>&pound;$([math]::Round($row.GRSAnnualSavings, 2))</td>
+                    <td>&pound;$([math]::Round($row.LRSAnnualSavings, 2))</td>
                     <td><span class="recommendation $recClass">$($row.RecommendedAction)</span></td>
                 </tr>
 "@
@@ -479,7 +521,9 @@ function Export-ToHtml {
 </html>
 "@
         
-        $html | Out-File -FilePath $FilePath -Encoding UTF8
+        # Use UTF8 with BOM to ensure proper currency symbol encoding
+        $utf8WithBom = New-Object System.Text.UTF8Encoding $true
+        [System.IO.File]::WriteAllText($FilePath, $html, $utf8WithBom)
         Write-Log "HTML report exported to: $FilePath"
     }
     catch {
