@@ -1,0 +1,92 @@
+{
+  "currency": "GBP",
+  "analysisPeriodDays": 30,
+  "outputDirectory": "./output",
+  "environmentPatterns": {
+    "nonProd": [
+      "dev",
+      "test",
+      "qa",
+      "staging",
+      "nonprod",
+      "non-prod"
+    ],
+    "prod": [
+      "prod",
+      "production"
+    ]
+  },
+  "pricing": {
+    "default": {
+      "Blob": {
+        "LRS": 0.0145,
+        "ZRS": 0.0181,
+        "GRS": 0.0291,
+        "RAGRS": 0.0363
+      },
+      "File": {
+        "LRS": 0.0145,
+        "ZRS": 0.0181,
+        "GRS": 0.0291,
+        "RAGRS": 0.0363
+      },
+      "Table": {
+        "LRS": 0.0145,
+        "ZRS": 0.0181,
+        "GRS": 0.0291,
+        "RAGRS": 0.0363
+      }
+    },
+    "regions": {
+      "uksouth": {
+        "Blob": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "File": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "Table": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        }
+      },
+      "ukwest": {
+        "Blob": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "File": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        },
+        "Table": {
+          "LRS": 0.0152,
+          "ZRS": 0.0190,
+          "GRS": 0.0305,
+          "RAGRS": 0.0382
+        }
+      }
+    }
+  },
+  "optimizationSettings": {
+    "emptyAccountThresholdDays": 90,
+    "inactiveAccountThresholdDays": 90,
+    "lowUsageThresholdGB": 1,
+    "tierOptimizationDays": 30,
+    "enableDeletionRecommendations": true,
+    "enableTierOptimization": true,
+    "enableConsolidationAnalysis": true
+  }
+}
