@@ -286,9 +286,10 @@ function Get-SecondaryReadUsage {
         $ErrorActionPreferenceBackup = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
         
-        $metrics = Get-AzMetric -ResourceId $ResourceId -MetricName "GeoSecondaryRead" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+        $allMetrics = Get-AzMetric -ResourceId $ResourceId -MetricName "Transactions" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         
-        if (-not $metrics -or -not $metrics.Data) {
+        if (-not $allMetrics -or -not $allMetrics.Data) {
+            $ErrorActionPreference = $ErrorActionPreferenceBackup
             return @{
                 Count = 0
                 Percentage = 0
@@ -296,26 +297,38 @@ function Get-SecondaryReadUsage {
             }
         }
         
-        $totalReads = ($metrics.Data | Measure-Object -Property Total -Sum).Sum
-        $avgReads = ($metrics.Data | Measure-Object -Property Average -Average).Average
+        $totalSecondaryTransactions = 0
+        $totalPrimaryTransactions = 0
         
-        $primaryMetrics = Get-AzMetric -ResourceId $ResourceId -MetricName "Transactions" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-        $totalTransactions = 0
-        if ($primaryMetrics -and $primaryMetrics.Data) {
-            $totalTransactions = ($primaryMetrics.Data | Measure-Object -Property Total -Sum).Sum
+        foreach ($metric in $allMetrics.Data) {
+            if ($metric.Dimensions) {
+                $geoType = $metric.Dimensions | Where-Object { $_.Name -eq "GeoType" } | Select-Object -ExpandProperty Value
+                if ($geoType -eq "Secondary") {
+                    if ($metric.Total) {
+                        $totalSecondaryTransactions += $metric.Total
+                    }
+                }
+                elseif ($geoType -eq "Primary") {
+                    if ($metric.Total) {
+                        $totalPrimaryTransactions += $metric.Total
+                    }
+                }
+            }
         }
+        
+        $totalTransactions = $totalPrimaryTransactions + $totalSecondaryTransactions
         
         $ErrorActionPreference = $ErrorActionPreferenceBackup
         
         $percentage = 0
         if ($totalTransactions -gt 0) {
-            $percentage = [math]::Round(($totalReads / $totalTransactions) * 100, 2)
+            $percentage = [math]::Round(($totalSecondaryTransactions / $totalTransactions) * 100, 2)
         }
         
-        $isUsed = $totalReads -gt 0 -or $percentage -gt 1
+        $isUsed = $totalSecondaryTransactions -gt 0 -or $percentage -gt 1
         
         return @{
-            Count = [math]::Round($totalReads, 0)
+            Count = [math]::Round($totalSecondaryTransactions, 0)
             Percentage = $percentage
             IsUsed = $isUsed
         }
