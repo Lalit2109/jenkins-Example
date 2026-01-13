@@ -2,12 +2,14 @@
 
 <#
 .SYNOPSIS
-    Analyzes Azure RAGRS storage accounts to identify cost optimization opportunities.
+    Analyzes Azure storage accounts (RAGRS/GRS/ZRS/LRS) to identify cost optimization opportunities.
 
 .DESCRIPTION
-    This script analyzes all RAGRS storage accounts across Azure subscriptions to:
-    - Check if secondary read endpoint is being used
+    This script analyzes all storage accounts with RAGRS, GRS, ZRS, and LRS redundancy across Azure subscriptions to:
+    - Check if secondary read endpoint is being used (for RAGRS accounts)
+    - Identify environment type (Prod/Non-Prod) based on account name and subscription name
     - Calculate data sizes and potential cost savings
+    - Recommend conversions: Non-Prod accounts to LRS, Prod accounts (without secondary read) to GRS
     - Generate CSV and HTML reports for business presentation
 
 .PARAMETER ConfigPath
@@ -62,6 +64,17 @@ function Get-Config {
         Write-Log "Failed to parse configuration file: $_" "ERROR"
         throw
     }
+}
+
+function Get-RedundancyTypeFromSku {
+    param([string]$SkuName)
+    
+    if ($SkuName -like "*RAGRS*") { return "RAGRS" }
+    if ($SkuName -like "*GRS*" -and $SkuName -notlike "*RA*") { return "GRS" }
+    if ($SkuName -like "*ZRS*") { return "ZRS" }
+    if ($SkuName -like "*LRS*") { return "LRS" }
+    
+    return $SkuName
 }
 
 function Get-PricingForRegion {
@@ -120,8 +133,14 @@ function Get-PricingForRegion {
 function Get-EnvironmentType {
     param(
         [string]$StorageAccountName,
+        [string]$SubscriptionName,
         [object]$Config
     )
+    
+    $subscriptionLower = $SubscriptionName.ToLower()
+    if ($subscriptionLower -match "production") {
+        return "Prod"
+    }
     
     $nameLower = $StorageAccountName.ToLower()
     
@@ -248,14 +267,22 @@ function Get-StorageAccountUsage {
 function Get-SecondaryReadUsage {
     param(
         [string]$ResourceId,
+        [string]$RedundancyType,
         [int]$Days
     )
+    
+    if ($RedundancyType -notlike "*RAGRS*") {
+        return @{
+            Count = 0
+            Percentage = 0
+            IsUsed = $false
+        }
+    }
     
     try {
         $startTime = (Get-Date).AddDays(-$Days)
         $endTime = Get-Date
         
-        # Suppress deprecation warnings
         $ErrorActionPreferenceBackup = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
         
@@ -308,15 +335,17 @@ function Calculate-CostSavings {
         [double]$DataSizeGB,
         [object]$Config,
         [string]$Region,
+        [string]$CurrentRedundancy,
         [string]$StorageType = "Blob"
     )
     
-    $ragrsPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType "RAGRS" -StorageType $StorageType
+    $currentPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType $CurrentRedundancy -StorageType $StorageType
     $lrsPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType "LRS" -StorageType $StorageType
     $zrsPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType "ZRS" -StorageType $StorageType
     $grsPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType "GRS" -StorageType $StorageType
+    $ragrsPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType "RAGRS" -StorageType $StorageType
     
-    $currentCost = $DataSizeGB * $ragrsPrice
+    $currentCost = $DataSizeGB * $currentPrice
     $lrsCost = $DataSizeGB * $lrsPrice
     $zrsCost = $DataSizeGB * $zrsPrice
     $grsCost = $DataSizeGB * $grsPrice
@@ -335,27 +364,79 @@ function Calculate-CostSavings {
     }
 }
 
-function Get-RecommendedAction {
+function Calculate-RecommendedSavings {
     param(
-        [bool]$IsSecondaryReadUsed,
-        [string]$Environment,
-        [object]$CostSavings
+        [double]$DataSizeGB,
+        [object]$Config,
+        [string]$Region,
+        [string]$CurrentRedundancy,
+        [string]$RecommendedAction,
+        [string]$StorageType = "Blob"
     )
     
-    if ($IsSecondaryReadUsed) {
-        return "Keep RAGRS"
+    $currentPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType $CurrentRedundancy -StorageType $StorageType
+    
+    if ($RecommendedAction -eq "No Action Required" -or $RecommendedAction -like "Keep*") {
+        return @{
+            RecommendedTargetRedundancy = $CurrentRedundancy
+            RecommendedMonthlyCost = $DataSizeGB * $currentPrice
+            RecommendedAnnualSavings = 0
+        }
+    }
+    
+    $targetRedundancy = "LRS"
+    if ($RecommendedAction -like "*GRS*") {
+        $targetRedundancy = "GRS"
+    }
+    elseif ($RecommendedAction -like "*LRS*") {
+        $targetRedundancy = "LRS"
+    }
+    elseif ($RecommendedAction -like "*ZRS*") {
+        $targetRedundancy = "ZRS"
+    }
+    
+    $targetPrice = Get-PricingForRegion -Config $Config -Region $Region -RedundancyType $targetRedundancy -StorageType $StorageType
+    $currentCost = $DataSizeGB * $currentPrice
+    $targetCost = $DataSizeGB * $targetPrice
+    
+    return @{
+        RecommendedTargetRedundancy = $targetRedundancy
+        RecommendedMonthlyCost = [math]::Round($targetCost, 2)
+        RecommendedAnnualSavings = [math]::Round(($currentCost - $targetCost) * 12, 2)
+    }
+}
+
+function Get-RecommendedAction {
+    param(
+        [string]$CurrentRedundancy,
+        [bool]$IsSecondaryReadUsed,
+        [string]$Environment
+    )
+    
+    if ($CurrentRedundancy -like "*LRS*") {
+        return "No Action Required"
     }
     
     if ($Environment -eq "Non-Prod") {
-        if ($CostSavings.ZRSSavings -gt $CostSavings.LRSSavings) {
-            return "Convert to ZRS"
-        }
-        else {
+        if ($CurrentRedundancy -like "*RAGRS*" -or $CurrentRedundancy -like "*GRS*" -or $CurrentRedundancy -like "*ZRS*") {
             return "Convert to LRS"
         }
     }
     elseif ($Environment -eq "Prod") {
-        return "Convert to GRS"
+        if ($CurrentRedundancy -like "*RAGRS*") {
+            if ($IsSecondaryReadUsed) {
+                return "Keep RAGRS"
+            }
+            else {
+                return "Convert to GRS"
+            }
+        }
+        elseif ($CurrentRedundancy -like "*GRS*") {
+            return "Keep GRS"
+        }
+        elseif ($CurrentRedundancy -like "*ZRS*") {
+            return "Keep ZRS"
+        }
     }
     
     return "Review Required"
@@ -395,9 +476,7 @@ function Export-ToHtml {
         $totalDataGB = ($Data | Measure-Object -Property DataSizeGB -Sum).Sum
         $totalDataTB = [math]::Round($totalDataGB / 1024, 2)
         $totalCurrentCost = ($Data | Measure-Object -Property CurrentMonthlyCost -Sum).Sum
-        $totalLRSSavings = ($Data | Measure-Object -Property LRSAnnualSavings -Sum).Sum
-        $totalZRSSavings = ($Data | Measure-Object -Property ZRSAnnualSavings -Sum).Sum
-        $totalGRSSavings = ($Data | Measure-Object -Property GRSAnnualSavings -Sum).Sum
+        $totalRecommendedSavings = ($Data | Measure-Object -Property RecommendedAnnualSavings -Sum).Sum
         $accountsWithSecondaryRead = ($Data | Where-Object { $_.IsSecondaryReadUsed -eq $true }).Count
         $accountsWithoutSecondaryRead = $totalAccounts - $accountsWithSecondaryRead
         
@@ -406,7 +485,7 @@ function Export-ToHtml {
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Azure RAGRS Storage Analysis Report</title>
+    <title>Azure Storage Redundancy Analysis Report</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
         .container { max-width: 1400px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -428,20 +507,21 @@ function Export-ToHtml {
         .convert-grs { background-color: #d1ecf1; color: #0c5460; }
         .convert-lrs { background-color: #d4edda; color: #155724; }
         .keep { background-color: #f8d7da; color: #721c24; }
+        .no-action { background-color: #e2e3e5; color: #383d41; }
         .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; color: #666; font-size: 11px; text-align: center; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Azure RAGRS Storage Account Analysis Report</h1>
+        <h1>Azure Storage Redundancy Analysis Report</h1>
         <p><strong>Generated:</strong> $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")</p>
         
         <h2>Executive Summary</h2>
         <div class="summary">
             <div class="summary-card">
-                <h3>Total RAGRS Accounts</h3>
+                <h3>Total Accounts Analyzed</h3>
                 <div class="value">$totalAccounts</div>
-                <div class="label">Storage Accounts</div>
+                <div class="label">RAGRS/GRS/ZRS/LRS Accounts</div>
             </div>
             <div class="summary-card">
                 <h3>Total Data Stored</h3>
@@ -451,7 +531,7 @@ function Export-ToHtml {
             <div class="summary-card">
                 <h3>Current Monthly Cost</h3>
                 <div class="value">&pound;$([math]::Round($totalCurrentCost, 2))</div>
-                <div class="label">RAGRS Pricing</div>
+                <div class="label">Current Redundancy Pricing</div>
             </div>
             <div class="summary-card">
                 <h3>Secondary Read Usage</h3>
@@ -460,8 +540,8 @@ function Export-ToHtml {
             </div>
             <div class="summary-card">
                 <h3>Potential Annual Savings</h3>
-                <div class="value">&pound;$([math]::Round([Math]::Max($totalZRSSavings, [Math]::Max($totalLRSSavings, $totalGRSSavings)), 2))</div>
-                <div class="label">If converted appropriately</div>
+                <div class="value">&pound;$([math]::Round($totalRecommendedSavings, 2))</div>
+                <div class="label">Non-Prod→LRS, Prod→GRS</div>
             </div>
         </div>
         
@@ -473,14 +553,13 @@ function Export-ToHtml {
                     <th>Storage Account</th>
                     <th>Resource Group</th>
                     <th>Location</th>
+                    <th>Current Redundancy</th>
                     <th>Storage Type</th>
                     <th>Environment</th>
                     <th>Data Size (GB)</th>
                     <th>Secondary Read Used</th>
                     <th>Current Cost/Month</th>
-                    <th>ZRS Savings/Year</th>
-                    <th>GRS Savings/Year</th>
-                    <th>LRS Savings/Year</th>
+                    <th>Recommended Savings/Year</th>
                     <th>Recommendation</th>
                 </tr>
             </thead>
@@ -493,6 +572,8 @@ function Export-ToHtml {
                 "*ZRS*" { "convert-zrs" }
                 "*GRS*" { "convert-grs" }
                 "*LRS*" { "convert-lrs" }
+                "*No Action*" { "no-action" }
+                "*Keep*" { "keep" }
                 default { "keep" }
             }
             
@@ -502,14 +583,13 @@ function Export-ToHtml {
                     <td>$($row.StorageAccountName)</td>
                     <td>$($row.ResourceGroupName)</td>
                     <td>$($row.Location)</td>
+                    <td>$($row.CurrentRedundancy)</td>
                     <td>$($row.StorageType)</td>
                     <td>$($row.Environment)</td>
                     <td>$([math]::Round($row.DataSizeGB, 2))</td>
                     <td>$secondaryReadStatus</td>
                     <td>&pound;$([math]::Round($row.CurrentMonthlyCost, 2))</td>
-                    <td>&pound;$([math]::Round($row.ZRSAnnualSavings, 2))</td>
-                    <td>&pound;$([math]::Round($row.GRSAnnualSavings, 2))</td>
-                    <td>&pound;$([math]::Round($row.LRSAnnualSavings, 2))</td>
+                    <td>&pound;$([math]::Round($row.RecommendedAnnualSavings, 2))</td>
                     <td><span class="recommendation $recClass">$($row.RecommendedAction)</span></td>
                 </tr>
 "@
@@ -520,8 +600,8 @@ function Export-ToHtml {
         </table>
         
         <div class="footer">
-            <p>Report generated by Azure RAGRS Storage Analysis Script</p>
-            <p>Note: Pricing may vary by region. Please verify current Azure pricing before making conversion decisions.</p>
+            <p>Report generated by Azure Storage Redundancy Analysis Script</p>
+            <p>Note: Pricing may vary by region. Recommendations: Non-Prod accounts → LRS, Prod accounts (without secondary read) → GRS.</p>
         </div>
     </div>
 </body>
@@ -547,7 +627,7 @@ function Export-ToHtml {
 }
 
 function Main {
-    Write-Log "Starting Azure RAGRS Storage Analysis"
+    Write-Log "Starting Azure Storage Redundancy Analysis"
     
     try {
         $context = Get-AzContext
@@ -586,9 +666,9 @@ function Main {
     }
     
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $csvPath = Join-Path $OutputPath "ragrs-analysis_$timestamp.csv"
-    $htmlPath = Join-Path $OutputPath "ragrs-analysis_$timestamp.html"
-    $errorLogPath = Join-Path $OutputPath "ragrs-analysis_errors_$timestamp.log"
+    $csvPath = Join-Path $OutputPath "storage-redundancy-analysis_$timestamp.csv"
+    $htmlPath = Join-Path $OutputPath "storage-redundancy-analysis_$timestamp.html"
+    $errorLogPath = Join-Path $OutputPath "storage-redundancy-analysis_errors_$timestamp.log"
     
     $results = @()
     $subscriptions = Get-AzSubscription -ErrorAction SilentlyContinue
@@ -619,22 +699,30 @@ function Main {
             continue
         }
         
-        $ragrsAccounts = $storageAccounts | Where-Object { 
-            $_.Sku.Name -like "*RAGRS*" 
+        $targetAccounts = $storageAccounts | Where-Object { 
+            $sku = $_.Sku.Name
+            $sku -like "*RAGRS*" -or 
+            ($sku -like "*GRS*" -and $sku -notlike "*RA*") -or 
+            $sku -like "*ZRS*" -or 
+            $sku -like "*LRS*"
         }
         
-        Write-Log "Found $($ragrsAccounts.Count) RAGRS storage account(s) in subscription $($subscription.Name)"
+        Write-Log "Found $($targetAccounts.Count) storage account(s) (RAGRS/GRS/ZRS/LRS) in subscription $($subscription.Name)"
         
-        foreach ($account in $ragrsAccounts) {
-            Write-Log "Analyzing: $($account.StorageAccountName)"
+        foreach ($account in $targetAccounts) {
+            Write-Log "Analyzing: $($account.StorageAccountName) ($($account.Sku.Name))"
             
             try {
+                $skuName = $account.Sku.Name
+                $currentRedundancy = Get-RedundancyTypeFromSku -SkuName $skuName
                 $dataSizeGB = Get-StorageAccountUsage -ResourceGroupName $account.ResourceGroupName -StorageAccountName $account.StorageAccountName
-                $secondaryRead = Get-SecondaryReadUsage -ResourceId $account.Id -Days $config.analysisPeriodDays
+                $secondaryRead = Get-SecondaryReadUsage -ResourceId $account.Id -RedundancyType $currentRedundancy -Days $config.analysisPeriodDays
                 $storageType = Get-StorageAccountType -StorageAccount $account
-                $costSavings = Calculate-CostSavings -DataSizeGB $dataSizeGB -Config $config -Region $account.Location -StorageType $storageType
-                $environment = Get-EnvironmentType -StorageAccountName $account.StorageAccountName -Config $config
-                $recommendation = Get-RecommendedAction -IsSecondaryReadUsed $secondaryRead.IsUsed -Environment $environment -CostSavings $costSavings
+                $environment = Get-EnvironmentType -StorageAccountName $account.StorageAccountName -SubscriptionName $subscription.Name -Config $config
+                $recommendation = Get-RecommendedAction -CurrentRedundancy $currentRedundancy -IsSecondaryReadUsed $secondaryRead.IsUsed -Environment $environment
+                
+                $costSavings = Calculate-CostSavings -DataSizeGB $dataSizeGB -Config $config -Region $account.Location -CurrentRedundancy $currentRedundancy -StorageType $storageType
+                $recommendedSavings = Calculate-RecommendedSavings -DataSizeGB $dataSizeGB -Config $config -Region $account.Location -CurrentRedundancy $currentRedundancy -RecommendedAction $recommendation -StorageType $storageType
                 
                 $result = [PSCustomObject]@{
                     SubscriptionName = $subscription.Name
@@ -642,8 +730,8 @@ function Main {
                     ResourceGroupName = $account.ResourceGroupName
                     StorageAccountName = $account.StorageAccountName
                     Location = $account.Location
-                    CurrentRedundancy = $account.Sku.Name
-                    StorageTier = if ($account.Sku.Name -like "Premium*") { "Premium" } else { "Standard" }
+                    CurrentRedundancy = $skuName
+                    StorageTier = if ($skuName -like "Premium*") { "Premium" } else { "Standard" }
                     StorageType = $storageType
                     DataSizeGB = $dataSizeGB
                     DataSizeTB = [math]::Round($dataSizeGB / 1024, 2)
@@ -661,11 +749,13 @@ function Main {
                     GRSSavings = $costSavings.GRSSavings
                     GRSAnnualSavings = $costSavings.GRSAnnualSavings
                     RecommendedAction = $recommendation
+                    RecommendedTargetRedundancy = $recommendedSavings.RecommendedTargetRedundancy
+                    RecommendedAnnualSavings = $recommendedSavings.RecommendedAnnualSavings
                     Environment = $environment
                 }
                 
                 $results += $result
-                Write-Log "Completed: $($account.StorageAccountName) - Data: $dataSizeGB GB, Secondary Read: $($secondaryRead.IsUsed)"
+                Write-Log "Completed: $($account.StorageAccountName) - Redundancy: $currentRedundancy, Data: $dataSizeGB GB, Secondary Read: $($secondaryRead.IsUsed), Recommendation: $recommendation"
             }
             catch {
                 Write-Log "Error analyzing account $($account.StorageAccountName): $_" "ERROR"
@@ -675,7 +765,7 @@ function Main {
     }
     
     if ($results.Count -eq 0) {
-        Write-Log "No RAGRS storage accounts found" "WARN"
+        Write-Log "No storage accounts found (RAGRS/GRS/ZRS/LRS)" "WARN"
         exit 0
     }
     
