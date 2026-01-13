@@ -286,34 +286,34 @@ function Get-SecondaryReadUsage {
         $ErrorActionPreferenceBackup = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
         
-        $allMetrics = Get-AzMetric -ResourceId $ResourceId -MetricName "Transactions" -TimeGrain 01:00:00 -StartTime $startTime -EndTime $endTime -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+        $secondaryMetrics = Get-AzMetric -ResourceId $ResourceId `
+            -MetricNamespace "Microsoft.Storage/storageAccounts" `
+            -MetricName "Transactions" `
+            -AggregationType Total `
+            -TimeGrain 01:00:00 `
+            -StartTime $startTime -EndTime $endTime `
+            -MetricFilter "GeoType eq 'Secondary'" `
+            -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         
-        if (-not $allMetrics -or -not $allMetrics.Data) {
-            $ErrorActionPreference = $ErrorActionPreferenceBackup
-            return @{
-                Count = 0
-                Percentage = 0
-                IsUsed = $false
-            }
-        }
+        $primaryMetrics = Get-AzMetric -ResourceId $ResourceId `
+            -MetricNamespace "Microsoft.Storage/storageAccounts" `
+            -MetricName "Transactions" `
+            -AggregationType Total `
+            -TimeGrain 01:00:00 `
+            -StartTime $startTime -EndTime $endTime `
+            -MetricFilter "GeoType eq 'Primary'" `
+            -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         
         $totalSecondaryTransactions = 0
-        $totalPrimaryTransactions = 0
+        if ($secondaryMetrics -and $secondaryMetrics.Data) {
+            $totalSecondaryTransactions = ($secondaryMetrics.Data | Measure-Object -Property Total -Sum | Select-Object -ExpandProperty Sum)
+            if (-not $totalSecondaryTransactions) { $totalSecondaryTransactions = 0 }
+        }
         
-        foreach ($metric in $allMetrics.Data) {
-            if ($metric.Dimensions) {
-                $geoType = $metric.Dimensions | Where-Object { $_.Name -eq "GeoType" } | Select-Object -ExpandProperty Value
-                if ($geoType -eq "Secondary") {
-                    if ($metric.Total) {
-                        $totalSecondaryTransactions += $metric.Total
-                    }
-                }
-                elseif ($geoType -eq "Primary") {
-                    if ($metric.Total) {
-                        $totalPrimaryTransactions += $metric.Total
-                    }
-                }
-            }
+        $totalPrimaryTransactions = 0
+        if ($primaryMetrics -and $primaryMetrics.Data) {
+            $totalPrimaryTransactions = ($primaryMetrics.Data | Measure-Object -Property Total -Sum | Select-Object -ExpandProperty Sum)
+            if (-not $totalPrimaryTransactions) { $totalPrimaryTransactions = 0 }
         }
         
         $totalTransactions = $totalPrimaryTransactions + $totalSecondaryTransactions
