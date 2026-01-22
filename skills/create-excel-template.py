@@ -7,11 +7,8 @@ Everything in Excel - just paste responses and get charts!
 
 try:
     import openpyxl
-    from openpyxl.chart import RadarChart, Reference
-    from openpyxl.chart.marker import DataPoint
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
-    from openpyxl.chart.label import DataLabelList
 except ImportError:
     print("openpyxl required. Install: pip install openpyxl")
     exit(1)
@@ -235,56 +232,6 @@ def create_excel_template():
     
     ws_charts.column_dimensions['A'].width = 80
     
-    # Create a sample section-level chart
-    # Note: Charts need data, so we'll create it with sample data structure
-    # User will need to update the data range after pasting real data
-    
-    # Add sample data for chart (2 rows)
-    chart_data_start_row = 20
-    ws_charts.cell(chart_data_start_row, 1, "Sample Data for Chart")
-    ws_charts.cell(chart_data_start_row + 1, 1, "Person 1")
-    ws_charts.cell(chart_data_start_row + 2, 1, "Person 2")
-    
-    # Add section headers
-    for idx, section in enumerate(sections):
-        col = idx + 2
-        ws_charts.cell(chart_data_start_row, col, section)
-        ws_charts.cell(chart_data_start_row + 1, col, 3.0)  # Sample data
-        ws_charts.cell(chart_data_start_row + 2, col, 4.0)  # Sample data
-    
-    # Create radar chart
-    chart = RadarChart()
-    chart.type = "filled"
-    chart.style = 26
-    chart.title = "Section-Level Skills Assessment"
-    chart.y_axis.delete = False
-    chart.y_axis.scaling.min = 0
-    chart.y_axis.scaling.max = 5
-    
-    # Data range
-    categories = Reference(ws_charts, min_col=2, min_row=chart_data_start_row, max_col=9, max_row=chart_data_start_row)
-    data = Reference(ws_charts, min_col=2, min_row=chart_data_start_row + 1, max_col=9, max_row=chart_data_start_row + 2)
-    
-    chart.add_data(data, titles_from_data=False)
-    chart.set_categories(categories)
-    
-    # Add series
-    s1 = chart.series[0]
-    s1.marker = DataPoint()
-    s1.graphicalProperties.line.width = 20000
-    s1.graphicalProperties.line.solidFill = "4472C4"
-    s1.graphicalProperties.solidFill = "4472C4"
-    
-    if len(chart.series) > 1:
-        s2 = chart.series[1]
-        s2.marker = DataPoint()
-        s2.graphicalProperties.line.width = 20000
-        s2.graphicalProperties.line.solidFill = "70AD47"
-        s2.graphicalProperties.solidFill = "70AD47"
-    
-    # Position chart
-    ws_charts.add_chart(chart, "B5")
-    
     # Set column widths
     for ws in wb.worksheets:
         for col in range(1, 20):
@@ -302,7 +249,7 @@ def create_excel_template():
     print("    4. Section Summary (section averages)")
     print("    5. Section Details (all questions)")
     print("    6. Team Summary")
-    print("    7. Charts (with sample chart)")
+    print("    7. Charts (instructions for creating charts)")
     print("")
     print("  NEXT STEPS:")
     print("  1. Open the Excel file")
