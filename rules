@@ -1,0 +1,57 @@
+when HTTP_REQUEST {
+    # One pool with two members – change to your real values
+    set pool_name "pool_reg_AGW_UKS"
+    set member_uks_ip "10.0.0.1"   ;# UK South member
+    set member_ukw_ip "10.0.0.2"   ;# UK West member
+    set member_port   8443
+
+    set header_name "x-zone"
+
+    # Capture basic request info for testing
+    set host [string tolower [HTTP::host]]
+    set uri  [string tolower [HTTP::path]]
+    set header_value ""
+    if {[HTTP::header exists $header_name]} {
+        set header_value [HTTP::header $header_name]
+    }
+    log local0. "iRule: incoming host=$host uri=$uri $header_name=$header_value"
+
+    # 1. Header-based routing (highest priority)
+    if {[HTTP::header exists $header_name]} {
+        set zone [string tolower [HTTP::header $header_name]]
+
+        switch $zone {
+            "uks-alpha-001" {
+                pool $pool_name member $member_uks_ip $member_port
+                log local0. "iRule: header=$zone -> $member_uks_ip:$member_port"
+                return
+            }
+            "ukw-falcon-001" {
+                pool $pool_name member $member_ukw_ip $member_port
+                log local0. "iRule: header=$zone -> $member_ukw_ip:$member_port"
+                return
+            }
+            default {
+                # Fall through to path-based logic
+            }
+        }
+    }
+
+    # 2. Path-based routing (only if no usable header)
+    # Any path prefix listed in dr_paths will be sent to the same member.
+    # Add as many prefixes as you like here.
+    set dr_paths { /payment /claim /getlist }
+
+    foreach prefix $dr_paths {
+        if {[string first $prefix $uri] == 0} {
+            pool $pool_name member $member_ukw_ip $member_port
+            log local0. "iRule: path=$uri (matched $prefix) -> $member_ukw_ip:$member_port"
+            return
+        }
+    }
+
+    # 3. Default behavior – no header match and no path match
+    pool $pool_name member $member_uks_ip $member_port
+    log local0. "iRule: default routing -> $member_uks_ip:$member_port"
+}
+
